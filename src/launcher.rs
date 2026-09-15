@@ -10,6 +10,38 @@ use crate::classpath::build_classpath;
 use crate::java_locator;
 use crate::version_json::VersionJson;
 
+/// Module-access flags for modded launchers on modern JVMs.
+///
+/// Each `--add-opens` must be a complete `module/package=ALL-UNNAMED`
+/// specifier: the JVM parses the flag and its value together, so pushing
+/// them as two separate argv entries (`--add-opens`, `java.base/java.net`)
+/// fails boot with `Unable to parse --add-opens <module>=<value>`.
+pub fn module_access_flags(java_major: u32) -> Vec<String> {
+    if java_major < 9 {
+        return Vec::new();
+    }
+    let mut flags = Vec::new();
+    for module in [
+        "java.base/java.net",
+        "java.base/java.lang",
+        "java.base/java.lang.reflect",
+        "java.base/java.util",
+        "java.base/java.io",
+        "java.base/java.nio",
+        "java.base/sun.nio.ch",
+        "java.base/java.security",
+    ] {
+        flags.push(format!("--add-opens={module}=ALL-UNNAMED"));
+    }
+    if java_major >= 22 {
+        flags.push("--enable-native-access=ALL-UNNAMED".to_string());
+    }
+    if java_major >= 26 {
+        flags.push("--enable-final-field-mutation=ALL-UNNAMED".to_string());
+    }
+    flags
+}
+
 /// Drop JVM args that can break the game or the machine: proxy/DNS hijacks,
 /// TLS downgrades, agent injection, JDWP. Heap flags (`-Xms`/`-Xmx`) are NOT
 /// filtered — they are the legitimate way RAM is configured now.
@@ -169,25 +201,7 @@ pub fn build_launch_plan(
     args.push("-Dsun.net.inetaddr.ttl=0".to_string());
 
     // Module access needed by modloaders on modern JVMs.
-    if java_major >= 22 {
-        args.push("--enable-native-access=ALL-UNNAMED".to_string());
-        for module in [
-            "java.base/java.net",
-            "java.base/java.lang",
-            "java.base/java.lang.reflect",
-            "java.base/java.util",
-            "java.base/java.io",
-            "java.base/java.nio",
-            "java.base/sun.nio.ch",
-            "java.base/java.security",
-        ] {
-            args.push("--add-opens".to_string());
-            args.push(module.to_string());
-        }
-        if java_major >= 26 {
-            args.push("--enable-final-field-mutation=ALL-UNNAMED".to_string());
-        }
-    }
+    args.extend(module_access_flags(java_major));
 
     args.push(format!("-Djava.library.path={}", natives_dir.display()));
     args.push("-cp".to_string());
@@ -301,6 +315,37 @@ pub fn run_plan(plan: LaunchPlan, on_line: LineHandler) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_flags_are_complete_specifiers() {
+        let flags = module_access_flags(25);
+        // Every --add-opens must carry its target in the SAME argv entry:
+        // the JVM parses flag+value together, `--add-opens module/pkg`
+        // without `=ALL-UNNAMED` fails boot layer initialization.
+        let opens: Vec<&String> = flags
+            .iter()
+            .filter(|f| f.starts_with("--add-opens"))
+            .collect();
+        assert!(!opens.is_empty());
+        for f in opens {
+            let rest = f.trim_start_matches("--add-opens=");
+            assert!(
+                rest.ends_with("=ALL-UNNAMED"),
+                "incomplete --add-opens specifier: {f}"
+            );
+        }
+        assert!(flags.contains(&"--enable-native-access=ALL-UNNAMED".to_string()));
+        assert!(!flags.iter().any(|f| f.contains("final-field-mutation")));
+    }
+
+    #[test]
+    fn old_java_gets_no_module_flags_new_java_gets_final_field_mutation() {
+        assert!(module_access_flags(8).is_empty());
+        let modern = module_access_flags(26);
+        assert!(modern
+            .iter()
+            .any(|f| f.contains("--enable-final-field-mutation=ALL-UNNAMED")));
+    }
 
     #[test]
     fn filters_unsafe_args_but_keeps_heap_flags() {

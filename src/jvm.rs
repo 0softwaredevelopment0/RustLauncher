@@ -50,7 +50,6 @@ pub const PRESETS: &[JvmPreset] = &[
         label: "ZGC (optimized)",
         args: "-Xms1m -Xmx4g \
                -XX:+UseZGC \
-               -XX:+ZGenerational \
                -XX:+AlwaysPreTouch \
                -XX:+DisableExplicitGC \
                -XX:+ParallelRefProcEnabled",
