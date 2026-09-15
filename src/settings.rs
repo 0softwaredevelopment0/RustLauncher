@@ -9,22 +9,26 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::home;
+use crate::jvm;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Currently selected account name.
     pub username: String,
-    /// Game heap size in MB.
-    pub ram: u32,
     pub game_width: u32,
     pub game_height: u32,
     pub use_custom_resolution: bool,
-    /// Custom JVM arguments (safety-filtered before launch).
+    /// JVM arguments. Heap size lives here (`-Xms`/`-Xmx`); the game refuses
+    /// to launch without them. Defaults to [`jvm::DEFAULT_JVM_ARGS`].
     pub java_args: String,
-    /// Explicit java executable path; empty means auto-detect.
+    /// When false (default) the launcher auto-detects Java; when true,
+    /// `java_path` must point at a java executable.
+    pub use_custom_java: bool,
+    /// Explicit java executable path, used only in the custom mode.
     pub java_path: String,
-    /// Game directory override; empty means the default game dir.
+    /// Game directory. The launcher refuses to launch without it (empty means
+    /// "not configured yet").
     pub game_directory: String,
     pub selected_version: String,
     /// Server to auto-connect to ("host" or "host:port").
@@ -41,11 +45,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             username: String::new(),
-            ram: 4096,
             game_width: 854,
             game_height: 480,
             use_custom_resolution: false,
-            java_args: String::new(),
+            java_args: jvm::DEFAULT_JVM_ARGS.to_string(),
+            use_custom_java: false,
             java_path: String::new(),
             game_directory: String::new(),
             selected_version: String::new(),
@@ -99,7 +103,8 @@ mod tests {
         let dir = tmp_home("missing");
         let _ = std::fs::remove_dir_all(&dir);
         let s = Settings::load(&dir);
-        assert_eq!(s.ram, 4096);
+        assert_eq!(s.java_args, jvm::DEFAULT_JVM_ARGS);
+        assert!(!s.use_custom_java);
         assert_eq!(s.game_width, 854);
         assert!(s.dark_theme);
         let _ = std::fs::remove_dir_all(&dir);
@@ -110,9 +115,10 @@ mod tests {
         let dir = tmp_home("roundtrip");
         let _ = std::fs::remove_dir_all(&dir);
         let s = Settings {
-            ram: 8192,
+            java_args: "-Xms2g -Xmx8g -XX:+UseZGC".into(),
             username: "Rizer001".into(),
-            java_args: "-XX:+UseG1GC".into(),
+            use_custom_java: true,
+            java_path: "C:/java/bin/java.exe".into(),
             ..Settings::default()
         };
         s.save(&dir).unwrap();
@@ -133,17 +139,18 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_do_not_break_loading() {
+    fn unknown_and_legacy_fields_do_not_break_loading() {
         let dir = tmp_home("extra");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        // `ram` was removed from the struct; old configs must still load.
         std::fs::write(
             dir.join("config.json"),
             br#"{"ram": 2048, "someRemovedSetting": true}"#,
         )
         .unwrap();
         let s = Settings::load(&dir);
-        assert_eq!(s.ram, 2048);
+        assert_eq!(s.java_args, jvm::DEFAULT_JVM_ARGS);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

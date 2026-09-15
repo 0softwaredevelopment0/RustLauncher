@@ -10,13 +10,11 @@ use crate::classpath::build_classpath;
 use crate::java_locator;
 use crate::version_json::VersionJson;
 
-/// Drop JVM args that can break the game or the machine: duplicates of flags
-/// we set, proxy/DNS hijacks, TLS downgrades, agent injection, JDWP.
-/// (Same blocklist as the Java launcher, ported.)
+/// Drop JVM args that can break the game or the machine: proxy/DNS hijacks,
+/// TLS downgrades, agent injection, JDWP. Heap flags (`-Xms`/`-Xmx`) are NOT
+/// filtered — they are the legitimate way RAM is configured now.
 pub fn filter_custom_java_args(custom: &str) -> Vec<String> {
     const BLOCKED_PREFIXES: &[&str] = &[
-        "-xmx",
-        "-xms", // we set heap size ourselves
         "-dproxyhost",
         "-dproxyport",
         "-dhttp.proxyhost",
@@ -124,13 +122,21 @@ pub fn build_launch_plan(
     version_json: &VersionJson,
     version_jar: &Path,
     account: &Account,
-    ram_mb: u32,
-    custom_java_args: &str,
+    java_args: &str,
     custom_java_path: Option<&str>,
     server: Option<&str>,
     resolution: Option<(u32, u32)>,
 ) -> Result<LaunchPlan> {
-    let ram_mb = ram_mb.max(512);
+    let parsed_args: Vec<String> = java_args
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|arg| !arg.is_empty())
+        .map(str::to_string)
+        .collect();
+    // The game cannot start without heap flags; presets guarantee them,
+    // manual edits are checked here.
+    crate::jvm::validate_jvm_args(&parsed_args).map_err(|e| anyhow::anyhow!(e))?;
+
     let required_major = version_json.required_java_major().or(Some(21)).or(None);
     let required_major = required_major.unwrap_or(21);
 
@@ -155,15 +161,12 @@ pub fn build_launch_plan(
 
     let mut args: Vec<String> = Vec::new();
 
-    // Heap.
-    args.push(format!("-Xms{}M", (ram_mb / 2).min(1024)));
-    args.push(format!("-Xmx{ram_mb}M"));
+    // User JVM flags first: heap flags (-Xms/-Xmx) must come before the
+    // main class and are typically overridden only by later duplicates.
+    args.extend(filter_custom_java_args(java_args));
 
     // Short DNS TTL — do NOT force IPv4 (it breaks IPv6-only networks).
     args.push("-Dsun.net.inetaddr.ttl=0".to_string());
-
-    // Custom args, safely filtered.
-    args.extend(filter_custom_java_args(custom_java_args));
 
     // Module access needed by modloaders on modern JVMs.
     if java_major >= 22 {
@@ -300,13 +303,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn filters_unsafe_and_conflicting_args() {
+    fn filters_unsafe_args_but_keeps_heap_flags() {
         let kept = filter_custom_java_args(
             "-XX:+UseG1GC -Xmx8G -DproxyHost=evil -javaagent:x.jar -Dfoo=bar",
         );
         assert_eq!(
             kept,
-            vec!["-XX:+UseG1GC".to_string(), "-Dfoo=bar".to_string()]
+            vec![
+                "-XX:+UseG1GC".to_string(),
+                "-Xmx8G".to_string(),
+                "-Dfoo=bar".to_string()
+            ]
         );
     }
 

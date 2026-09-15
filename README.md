@@ -14,6 +14,8 @@ database and 10 000+ lines of Java.
   offline accounts (vanilla-compatible `OfflinePlayer:<name>` UUIDs),
   classpath assembly with dedup and LWJGL-conflict resolution, natives
   extraction, unsafe JVM-arg filtering, Java major-version selection.
+  RAM is configured via JVM flags (`-Xms`/`-Xmx`); the launcher refuses
+  to start the game without heap flags.
 - **Versions tab**: one merged list of everything — versions auto-discovered
   in the configured game directory (vanilla, Fabric, any modded install)
   and every version from the Mojang manifest — with type/installed filters,
@@ -27,7 +29,12 @@ database and 10 000+ lines of Java.
 - **Diagnostics**: DNS, HTTP and TCP checks against Mojang services and
   game servers.
 - **Logs**: numbered session logs (`logs/game-N.log`), one per launch.
-- **CLI kept**: `versions` and `launch` subcommands for scripting.
+- **JVM presets**: Minimal (`-Xms1m -Xmx4g`), optimized G1GC,
+  Shenandoah, ZGC and Parallel GC sets; free-form editing with live
+  validation. Java is auto-detected by default or pinned to a custom
+  executable.
+- **CLI kept**: `versions` and `launch` subcommands for scripting
+  (`launch` requires an explicit `--game-dir`).
 
 ## Build
 

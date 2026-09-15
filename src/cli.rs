@@ -28,17 +28,17 @@ pub enum Command {
         #[arg(long, short = 'v')]
         version: String,
 
-        /// Game directory override (defaults to auto-detection).
+        /// Game directory (required — the launcher will not guess).
         #[arg(long, short = 'g')]
-        game_dir: Option<String>,
+        game_dir: String,
 
         /// Offline username (letters, digits, underscores; 3–16 chars).
         #[arg(long, short = 'u')]
         username: Option<String>,
 
-        /// RAM for the game in MB (minimum 512).
-        #[arg(long, short = 'r', default_value_t = 4096)]
-        ram: u32,
+        /// Maximum heap for the game (-Xmx), e.g. "4G" or "4096M".
+        #[arg(long, short = 'r', default_value = "4g")]
+        ram: String,
 
         /// Server address to auto-connect to (host or host:port).
         #[arg(long, short = 's')]

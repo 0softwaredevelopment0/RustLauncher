@@ -15,6 +15,7 @@ mod diagnostics;
 mod gui;
 mod home;
 mod java_locator;
+mod jvm;
 mod launcher;
 mod logs;
 mod nbt;
@@ -48,9 +49,9 @@ fn main() {
             dry_run,
         }) => cmd_launch(
             version,
-            game_dir.as_deref(),
+            game_dir,
             username.as_deref(),
-            *ram,
+            ram,
             server.as_deref(),
             *all_logs,
             *dry_run,
@@ -132,9 +133,9 @@ fn cmd_versions(game_dir: Option<&str>) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 fn cmd_launch(
     version_name: &str,
-    game_dir: Option<&str>,
+    game_dir: &str,
     username: Option<&str>,
-    ram: u32,
+    ram: &str,
     server: Option<&str>,
     all_logs: bool,
     dry_run: bool,
@@ -142,12 +143,20 @@ fn cmd_launch(
     println!("=== RustLauncher ===");
     println!();
 
-    let root = version::resolve_game_dir(game_dir)?;
+    // The CLI never guesses the game directory: without --game-dir there is
+    // nothing to launch from.
+    if game_dir.trim().is_empty() {
+        return Err(anyhow::anyhow!(
+            "no game directory given: pass --game-dir <path> (versions live in <dir>/versions)"
+        ));
+    }
+    let dir = game_dir.trim();
+    let root = std::path::PathBuf::from(dir);
     println!("  Game dir: {}", root.display());
 
     if !root.is_dir() {
         return Err(anyhow::anyhow!(
-            "game directory does not exist: {} (create it or pass --game-dir)",
+            "game directory does not exist: {}",
             root.display()
         ));
     }
@@ -184,14 +193,23 @@ fn cmd_launch(
         println!("  Java:     {major}+ required");
     }
 
+    // --ram turns into the minimal JVM flag pair; flags are mandatory.
+    let ram_trim = ram.trim();
+    let ram_normalized = ram_trim.to_ascii_uppercase();
+    let ram_value = if ram_normalized.ends_with('G') || ram_normalized.ends_with('M') {
+        ram_trim.to_string()
+    } else {
+        format!("{ram_trim}m")
+    };
+    let jvm_flags = format!("-Xms1m -Xmx{ram_value}");
+
     let plan = launcher::build_launch_plan(
         &root,
         &found.name,
         &json,
         &found.jar,
         &account,
-        ram,
-        "",
+        &jvm_flags,
         None,
         server,
         None,

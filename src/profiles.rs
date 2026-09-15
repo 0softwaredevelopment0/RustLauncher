@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use crate::jvm;
 use crate::settings::Settings;
 
 const INDEX_FILE: &str = "profiles_index.json";
@@ -169,15 +171,16 @@ mod tests {
         // Creating a profile switches to it with default settings.
         assert_eq!(index.current.as_deref(), Some("Testing"));
 
-        // The user changed RAM while on Testing; switching away must keep it.
+        // The user changed the JVM flags while on Testing; switching away
+        // must keep them, and switching back must restore the preset.
         let live = Settings {
-            ram: 8192,
+            java_args: "-Xms2g -Xmx8g -XX:+UseZGC".into(),
             ..Settings::default()
         };
         let loaded = switch_profile(&dir, &mut index, "Default", &live).unwrap();
-        assert_eq!(loaded.ram, 4096);
+        assert_eq!(loaded.java_args, jvm::DEFAULT_JVM_ARGS);
         let back = switch_profile(&dir, &mut index, "Testing", &loaded).unwrap();
-        assert_eq!(back.ram, 8192);
+        assert_eq!(back.java_args, "-Xms2g -Xmx8g -XX:+UseZGC");
 
         // Duplicate names get a suffix.
         let dup = create_profile(&dir, &mut index, "Testing").unwrap();

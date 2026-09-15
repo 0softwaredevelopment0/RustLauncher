@@ -348,6 +348,49 @@ impl App {
         }
         self.launch_error = None;
 
+        // The game directory must be configured explicitly.
+        if resolve_game_dir(&self.settings)
+            .to_string_lossy()
+            .trim()
+            .is_empty()
+        {
+            self.launch_error =
+                Some("No game directory configured. Set it in Settings first.".into());
+            return;
+        }
+        if !resolve_game_dir(&self.settings).is_dir() {
+            self.launch_error = Some(format!(
+                "Game directory does not exist: {}",
+                resolve_game_dir(&self.settings).display()
+            ));
+            return;
+        }
+
+        // JVM flags (with the heap flags) are mandatory.
+        let flags: Vec<String> = self
+            .settings
+            .java_args
+            .split_whitespace()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if let Err(e) = crate::jvm::validate_jvm_args(&flags) {
+            self.launch_error = Some(e);
+            self.screen = Screen::Settings;
+            return;
+        }
+
+        // Custom Java mode must have an actual path.
+        if self.settings.use_custom_java && self.settings.java_path.trim().is_empty() {
+            self.launch_error = Some(
+                "Custom Java is selected but the Java path is empty. Pick a java executable \
+                 in Settings or switch back to Default."
+                    .into(),
+            );
+            self.screen = Screen::Settings;
+            return;
+        }
+
         let account = match self.current_account() {
             Some(account) => account,
             None => {
@@ -457,12 +500,11 @@ fn run_game_process(
         &json,
         &version.jar,
         account,
-        settings.ram,
         &settings.java_args,
-        if settings.java_path.trim().is_empty() {
-            None
-        } else {
+        if settings.use_custom_java && !settings.java_path.trim().is_empty() {
             Some(settings.java_path.trim())
+        } else {
+            None
         },
         if settings.auto_connect && !settings.connect_server_ip.trim().is_empty() {
             Some(settings.connect_server_ip.trim())
@@ -643,14 +685,6 @@ impl App {
                         );
                     }
                 });
-            ui.end_row();
-
-            ui.label("RAM");
-            ui.add(
-                egui::Slider::new(&mut self.settings.ram, 512..=16384)
-                    .step_by(256.0)
-                    .text("MB"),
-            );
             ui.end_row();
 
             if self.settings.auto_connect {
@@ -1181,6 +1215,9 @@ impl App {
     fn ui_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Settings");
         ui.add_space(4.0);
+        // Java-mode checkboxes mirror `use_custom_java`; only one is checked.
+        let mut default_java = !self.settings.use_custom_java;
+        let mut custom_java = self.settings.use_custom_java;
         egui::ScrollArea::vertical().show(ui, |ui| {
             // Profiles.
             ui.strong("Profile");
@@ -1259,45 +1296,82 @@ impl App {
                     }
                 }
             });
+            ui.add_space(4.0);
+
+            // Java: Default vs Custom, switched with checkboxes.
+            ui.strong("Java");
             ui.horizontal(|ui| {
-                ui.label("Java path");
-                ui.text_edit_singleline(&mut self.settings.java_path);
-                if ui.button("…").clicked() {
-                    if let Some(file) = rfd::FileDialog::new().pick_file() {
-                        self.settings.java_path = file.to_string_lossy().to_string();
-                    }
+                if ui
+                    .checkbox(&mut default_java, "Default (auto-detect)")
+                    .changed()
+                    && default_java
+                {
+                    self.settings.use_custom_java = false;
                 }
+                if ui.checkbox(&mut custom_java, "Custom path").changed() && custom_java {
+                    self.settings.use_custom_java = true;
+                }
+            });
+            ui.add_enabled_ui(self.settings.use_custom_java, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Java executable");
+                    ui.add_enabled(
+                        true,
+                        egui::TextEdit::singleline(&mut self.settings.java_path)
+                            .desired_width(360.0),
+                    );
+                    if ui.button("…").clicked() {
+                        if let Some(file) = rfd::FileDialog::new().pick_file() {
+                            self.settings.java_path = file.to_string_lossy().to_string();
+                        }
+                    }
+                });
             });
             ui.add_space(4.0);
 
-            ui.strong("Game");
+            // JVM flags: presets + free edit; heap flags are mandatory.
+            ui.strong("JVM flags");
+            ui.horizontal(|ui| {
+                for preset in crate::jvm::PRESETS {
+                    let selected = self.settings.java_args == preset.args;
+                    if ui
+                        .add_enabled(!selected, egui::Button::new(preset.label))
+                        .clicked()
+                    {
+                        self.settings.java_args = preset.args.to_string();
+                    }
+                }
+            });
             ui.add(
-                egui::Slider::new(&mut self.settings.ram, 512..=16384)
-                    .step_by(256.0)
-                    .text("RAM, MB"),
+                egui::TextEdit::multiline(&mut self.settings.java_args)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace),
             );
+            {
+                let flags: Vec<String> = self
+                    .settings
+                    .java_args
+                    .split_whitespace()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                match crate::jvm::validate_jvm_args(&flags) {
+                    Ok(()) => {
+                        ui.colored_label(egui::Color32::LIGHT_GREEN, "✓ heap flags present");
+                    }
+                    Err(e) => {
+                        ui.colored_label(egui::Color32::LIGHT_RED, e);
+                    }
+                }
+            }
+            ui.add_space(4.0);
+
+            ui.strong("Game");
             ui.checkbox(
                 &mut self.settings.use_custom_resolution,
                 "Custom resolution",
             );
-            if self.settings.use_custom_resolution {
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut self.settings.game_width).range(320..=7680));
-                    ui.label("×");
-                    ui.add(egui::DragValue::new(&mut self.settings.game_height).range(240..=4320));
-                });
-            }
-            ui.checkbox(&mut self.settings.auto_connect, "Auto-connect to server");
-            if self.settings.auto_connect {
-                ui.text_edit_singleline(&mut self.settings.connect_server_ip);
-            }
-            ui.label("Custom JVM args (safety-filtered)");
-            ui.add(
-                egui::TextEdit::multiline(&mut self.settings.java_args)
-                    .desired_rows(2)
-                    .desired_width(f32::INFINITY),
-            );
-            ui.add_space(4.0);
 
             ui.strong("Launcher");
             ui.checkbox(
