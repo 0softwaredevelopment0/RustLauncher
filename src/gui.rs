@@ -49,10 +49,11 @@ pub struct App {
     pub game_running: Arc<AtomicBool>,
     game_log: Arc<Mutex<Option<SessionLog>>>,
 
-    // Catalog.
+    // Version list (merged local + remote).
     pub manifest: Option<Result<Manifest, String>>,
     pub manifest_loading: bool,
-    pub catalog_filter: CatalogFilter,
+    pub version_filter: VersionFilter,
+    pub version_search: String,
     pub install_progress: Arc<Mutex<String>>,
     pub installing: Arc<AtomicBool>,
 
@@ -90,7 +91,7 @@ pub struct App {
 pub enum Screen {
     Play,
     Console,
-    Catalog,
+    Versions,
     Servers,
     Accounts,
     Skins,
@@ -99,32 +100,91 @@ pub enum Screen {
     Diagnostics,
 }
 
+/// One row of the merged version list: locally installed versions (vanilla,
+/// Fabric, whatever lives in the game directory) plus every version from the
+/// Mojang manifest.
+#[derive(Debug, Clone)]
+pub struct VersionRow {
+    pub name: String,
+    /// `release` / `snapshot` / `old_alpha` / `old_beta`, or `local` when the
+    /// version exists only on disk (modded installs missing from the manifest).
+    pub kind: String,
+    pub installed: bool,
+    pub is_latest_release: bool,
+    /// Present when the version can be (re-)installed from the manifest.
+    pub remote: Option<updater::ManifestVersion>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CatalogFilter {
+pub enum VersionFilter {
     All,
     Release,
     Snapshot,
     Old,
+    Installed,
 }
 
-impl CatalogFilter {
+impl VersionFilter {
     fn label(self) -> &'static str {
         match self {
-            CatalogFilter::All => "All",
-            CatalogFilter::Release => "Releases",
-            CatalogFilter::Snapshot => "Snapshots",
-            CatalogFilter::Old => "Old",
+            VersionFilter::All => "All",
+            VersionFilter::Release => "Releases",
+            VersionFilter::Snapshot => "Snapshots",
+            VersionFilter::Old => "Old",
+            VersionFilter::Installed => "Installed",
         }
     }
 
-    fn matches(self, kind: &str) -> bool {
+    fn matches(self, row: &VersionRow) -> bool {
         match self {
-            CatalogFilter::All => true,
-            CatalogFilter::Release => kind == "release",
-            CatalogFilter::Snapshot => kind == "snapshot",
-            CatalogFilter::Old => matches!(kind, "old_alpha" | "old_beta"),
+            VersionFilter::All => true,
+            VersionFilter::Release => row.kind == "release",
+            VersionFilter::Snapshot => row.kind == "snapshot",
+            VersionFilter::Old => matches!(row.kind.as_str(), "old_alpha" | "old_beta"),
+            VersionFilter::Installed => row.installed,
         }
     }
+}
+
+/// Merge locally discovered versions with the remote manifest. Local versions
+/// come first (the game directory order), then remote-only ones; a version
+/// present in both places takes the manifest kind and gains an Install entry.
+pub fn merge_versions(local: &[Version], manifest: Option<&Manifest>) -> Vec<VersionRow> {
+    let latest = manifest
+        .and_then(|m| m.latest.get("release").cloned())
+        .unwrap_or_default();
+    let mut rows: Vec<VersionRow> = Vec::new();
+    let mut index_by_name: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+
+    for v in local {
+        index_by_name.insert(v.name.clone(), rows.len());
+        rows.push(VersionRow {
+            name: v.name.clone(),
+            kind: "local".to_string(),
+            installed: true,
+            is_latest_release: v.name == latest,
+            remote: None,
+        });
+    }
+    if let Some(manifest) = manifest {
+        for mv in &manifest.versions {
+            if let Some(&i) = index_by_name.get(&mv.id) {
+                rows[i].kind = mv.kind.clone();
+                rows[i].remote = Some(mv.clone());
+            } else {
+                index_by_name.insert(mv.id.clone(), rows.len());
+                rows.push(VersionRow {
+                    name: mv.id.clone(),
+                    kind: mv.kind.clone(),
+                    installed: false,
+                    is_latest_release: mv.id == latest,
+                    remote: Some(mv.clone()),
+                });
+            }
+        }
+    }
+    rows
 }
 
 impl App {
@@ -155,7 +215,8 @@ impl App {
             game_log: Arc::new(Mutex::new(None)),
             manifest: None,
             manifest_loading: false,
-            catalog_filter: CatalogFilter::Release,
+            version_filter: VersionFilter::All,
+            version_search: String::new(),
             install_progress: Arc::new(Mutex::new(String::new())),
             installing: Arc::new(AtomicBool::new(false)),
             server_status: BTreeMap::new(),
@@ -503,7 +564,7 @@ impl eframe::App for App {
             for (screen, label) in [
                 (Screen::Play, "▶  Play"),
                 (Screen::Console, "▤  Console"),
-                (Screen::Catalog, "⤓  Catalog"),
+                (Screen::Versions, "☰  Versions"),
                 (Screen::Servers, "⛶  Servers"),
                 (Screen::Accounts, "◉  Accounts"),
                 (Screen::Skins, "☺  Skins"),
@@ -533,7 +594,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| match self.screen {
             Screen::Play => self.ui_play(ui),
             Screen::Console => self.ui_console(ui),
-            Screen::Catalog => self.ui_catalog(ui),
+            Screen::Versions => self.ui_versions(ui),
             Screen::Servers => self.ui_servers(ui),
             Screen::Accounts => self.ui_accounts(ui),
             Screen::Skins => self.ui_skins(ui, ctx),
@@ -674,8 +735,8 @@ impl App {
             });
     }
 
-    fn ui_catalog(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Version catalog (Mojang manifest)");
+    fn ui_versions(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Versions");
         ui.add_space(4.0);
 
         if self.manifest.is_none() && !self.manifest_loading {
@@ -689,17 +750,30 @@ impl App {
             );
         }
 
+        // Filters, search and status line.
         ui.horizontal(|ui| {
             for filter in [
-                CatalogFilter::Release,
-                CatalogFilter::Snapshot,
-                CatalogFilter::Old,
-                CatalogFilter::All,
+                VersionFilter::All,
+                VersionFilter::Release,
+                VersionFilter::Snapshot,
+                VersionFilter::Old,
+                VersionFilter::Installed,
             ] {
-                ui.selectable_value(&mut self.catalog_filter, filter, filter.label());
+                ui.selectable_value(&mut self.version_filter, filter, filter.label());
+            }
+            ui.separator();
+            ui.add(
+                egui::TextEdit::singleline(&mut self.version_search)
+                    .hint_text("Search…")
+                    .desired_width(160.0),
+            );
+            if ui.button("Rescan").clicked() {
+                self.reload_versions();
+            }
+            if ui.button("Refresh manifest").clicked() {
+                self.manifest = None;
             }
         });
-        ui.separator();
 
         let installing = self.installing.load(Ordering::SeqCst);
         let progress = self
@@ -712,50 +786,67 @@ impl App {
             ui.add(egui::ProgressBar::new(1.0).animate(true).text("working…"));
             ui.separator();
         }
+        if let Some(Err(e)) = &self.manifest {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                format!("Manifest unavailable ({e}) — showing local versions only"),
+            );
+        }
 
-        let manifest = match &self.manifest {
-            None => {
-                ui.label(if self.manifest_loading {
-                    "Loading the Mojang manifest…"
-                } else {
-                    "Press Refresh to load the catalog."
-                });
-                return;
-            }
-            Some(Err(e)) => {
-                ui.colored_label(egui::Color32::LIGHT_RED, format!("Manifest error: {e}"));
-                return;
-            }
-            Some(Ok(manifest)) => manifest.clone(),
+        let manifest_opt = match &self.manifest {
+            Some(Ok(manifest)) => Some(manifest),
+            _ => None,
         };
+        let rows = merge_versions(&self.versions, manifest_opt);
+        let search = self.version_search.trim().to_lowercase();
+        let shown: Vec<&VersionRow> = rows
+            .iter()
+            .filter(|row| self.version_filter.matches(row))
+            .filter(|row| search.is_empty() || row.name.to_lowercase().contains(&search))
+            .collect();
 
-        ui.horizontal(|ui| {
-            if ui.button("Refresh").clicked() {
-                self.manifest = None;
-            }
-            ui.label(format!("{} versions", manifest.versions.len()));
-        });
         ui.separator();
-        let latest_release = manifest.latest.get("release").cloned().unwrap_or_default();
+        ui.label(format!(
+            "{} shown · {} installed · selected: {}",
+            shown.len(),
+            self.versions.len(),
+            if self.settings.selected_version.is_empty() {
+                "— none —"
+            } else {
+                &self.settings.selected_version
+            }
+        ));
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for version in &manifest.versions {
-                if !self.catalog_filter.matches(&version.kind) {
-                    continue;
-                }
+            for row in shown {
                 ui.horizontal(|ui| {
-                    let marker = if version.id == latest_release {
-                        "  (latest release)"
+                    if row.installed {
+                        ui.label("✔");
                     } else {
-                        ""
-                    };
-                    ui.monospace(format!("{} [{}]{marker}", version.id, version.kind));
-                    let installed = self.versions.iter().any(|v| v.name == version.id);
-                    let label = if installed { "Re-install" } else { "Install" };
-                    if ui
-                        .add_enabled(!installing, egui::Button::new(label))
+                        ui.label(" ");
+                    }
+                    ui.monospace(&row.name);
+                    ui.weak(format!("[{}]", row.kind));
+                    if row.is_latest_release {
+                        ui.weak("(latest release)");
+                    }
+                    let is_selected = self.settings.selected_version == row.name;
+                    if is_selected {
+                        ui.colored_label(egui::Color32::LIGHT_GREEN, "selected");
+                    }
+                    if row.installed {
+                        if is_selected {
+                            ui.weak("current");
+                        } else if ui.button("Select").clicked() {
+                            self.settings.selected_version = row.name.clone();
+                            self.save_settings();
+                        }
+                    } else if ui
+                        .add_enabled(!installing, egui::Button::new("Install"))
                         .clicked()
                     {
-                        self.install_version(version.clone());
+                        if let Some(remote) = row.remote.clone() {
+                            self.install_version(remote);
+                        }
                     }
                 });
             }
@@ -1267,5 +1358,157 @@ impl App {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn local_version(name: &str) -> Version {
+        Version {
+            name: name.to_string(),
+            dir: PathBuf::from("."),
+            jar: PathBuf::from(format!("{name}.jar")),
+            json: PathBuf::from(format!("{name}.json")),
+        }
+    }
+
+    fn manifest_version(id: &str, kind: &str) -> updater::ManifestVersion {
+        updater::ManifestVersion {
+            id: id.to_string(),
+            kind: kind.to_string(),
+            url: format!("https://example.com/{id}.json"),
+            releaseTime: String::new(),
+        }
+    }
+
+    fn manifest(versions: Vec<updater::ManifestVersion>) -> Manifest {
+        let mut latest = BTreeMap::new();
+        latest.insert(
+            "release".to_string(),
+            versions
+                .iter()
+                .find(|v| v.kind == "release")
+                .map(|v| v.id.clone())
+                .unwrap_or_default(),
+        );
+        Manifest { latest, versions }
+    }
+
+    #[test]
+    fn merge_local_first_then_remote_only() {
+        let local = vec![local_version("fabric-1.20.1"), local_version("1.21.4")];
+        let remote = manifest(vec![
+            manifest_version("1.21.4", "release"),
+            manifest_version("1.21", "release"),
+            manifest_version("25w14craftmine", "snapshot"),
+        ]);
+        let rows = merge_versions(&local, Some(&remote));
+
+        // Local versions come first, remote-only afterwards.
+        assert_eq!(rows[0].name, "fabric-1.20.1");
+        assert_eq!(rows[0].kind, "local");
+        assert!(rows[0].installed);
+        assert!(rows[0].remote.is_none());
+
+        // 1.21.4 exists in both: kind comes from the manifest, installable.
+        assert_eq!(rows[1].name, "1.21.4");
+        assert_eq!(rows[1].kind, "release");
+        assert!(rows[1].installed);
+        assert!(rows[1].remote.is_some());
+        assert!(rows[1].is_latest_release);
+
+        // Remote-only versions are not installed.
+        let one_twenty_one = rows.iter().find(|r| r.name == "1.21").unwrap();
+        assert!(!one_twenty_one.installed);
+        assert!(one_twenty_one.remote.is_some());
+        assert_eq!(rows.len(), 4);
+    }
+
+    #[test]
+    fn merge_without_manifest_shows_local_only() {
+        let local = vec![local_version("fabric-1.20.1")];
+        let rows = merge_versions(&local, None);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].installed);
+        assert_eq!(rows[0].kind, "local");
+    }
+
+    #[test]
+    fn merge_with_empty_local_shows_remote_only() {
+        let remote = manifest(vec![manifest_version("1.21.4", "release")]);
+        let rows = merge_versions(&[], Some(&remote));
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].installed);
+        assert!(rows[0].remote.is_some());
+    }
+
+    #[test]
+    fn filters_match_kinds_and_installed() {
+        let rows = [
+            VersionRow {
+                name: "fabric-1.20.1".into(),
+                kind: "local".into(),
+                installed: true,
+                is_latest_release: false,
+                remote: None,
+            },
+            VersionRow {
+                name: "1.21.4".into(),
+                kind: "release".into(),
+                installed: true,
+                is_latest_release: false,
+                remote: None,
+            },
+            VersionRow {
+                name: "25w14craftmine".into(),
+                kind: "snapshot".into(),
+                installed: false,
+                is_latest_release: false,
+                remote: None,
+            },
+            VersionRow {
+                name: "a1.2.5".into(),
+                kind: "old_alpha".into(),
+                installed: false,
+                is_latest_release: false,
+                remote: None,
+            },
+        ];
+        let rows = &rows[..];
+        assert_eq!(
+            rows.iter()
+                .filter(|r| VersionFilter::All.matches(r))
+                .count(),
+            4
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|r| VersionFilter::Release.matches(r))
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1.21.4"]
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|r| VersionFilter::Snapshot.matches(r))
+                .count(),
+            1
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|r| VersionFilter::Old.matches(r))
+                .count(),
+            1
+        );
+        // "Installed" includes local-only and manifest-installed releases.
+        assert_eq!(
+            rows.iter()
+                .filter(|r| VersionFilter::Installed.matches(r))
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fabric-1.20.1", "1.21.4"]
+        );
     }
 }

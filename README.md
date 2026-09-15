@@ -8,15 +8,16 @@ database and 10 000+ lines of Java.
 
 ## Features
 
-- **GUI** (eframe/egui): Play, Console, Catalog, Servers, Accounts, Skins,
+- **GUI** (eframe/egui): Play, Console, Versions, Servers, Accounts, Skins,
   News, Settings, Diagnostics — with dark/light theme.
 - **Launch pipeline**: version discovery in three directory layouts,
   offline accounts (vanilla-compatible `OfflinePlayer:<name>` UUIDs),
   classpath assembly with dedup and LWJGL-conflict resolution, natives
   extraction, unsafe JVM-arg filtering, Java major-version selection.
-- **Version catalog**: install any release/snapshot/old version directly
-  from the Mojang manifest — version JSON, client jar (SHA-1 verified),
-  asset index and all assets.
+- **Versions tab**: one merged list of everything — versions auto-discovered
+  in the configured game directory (vanilla, Fabric, any modded install)
+  and every version from the Mojang manifest — with type/installed filters,
+  a search box, and Select/Install buttons per row.
 - **Servers**: import/export Minecraft's `servers.dat` **without losing
   per-server icons** (the Java version rewrote the file from scratch and
   dropped every unknown NBT tag), plus a TCP status probe.
@@ -64,7 +65,7 @@ Settings/accounts/servers/profiles/skins/logs live in the launcher home
 | JavaFX controller, 4300 LoC | egui GUI, native binary               |
 | SQLite settings/accounts    | typed JSON files (config/accounts/…)  |
 | Manual JSON string search   | serde struct parsing                  |
-| Could only list remote versions | Full install with SHA-1 checks   |
+| Could only list remote versions | Full install with SHA-1 checks; one merged local+remote version list |
 | servers.dat rewrite lost icons | NBT-preserving merge               |
 | 5-minute kill timer in CLI  | Waits as long as the game runs        |
 | Launcher JRE used for game  | Required Java major auto-selected     |
