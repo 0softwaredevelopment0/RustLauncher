@@ -1,0 +1,22 @@
+[package]
+name = "rustlauncher"
+version = "0.1.0"
+edition = "2021"
+description = "RustLauncher - a fast Minecraft launcher rewritten in Rust (successor of the Java PowerLaunch)"
+license = "AGPL-3.0"
+authors = ["rizer01"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+md5 = "0.7"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
