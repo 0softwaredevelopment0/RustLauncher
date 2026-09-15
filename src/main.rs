@@ -2,13 +2,29 @@
 //!
 //! Successor of the Java/JavaFX PowerLaunch: the same launch pipeline
 //! (version discovery, offline auth, classpath assembly, JVM arg handling)
-//! without a GUI, database, or the JVM-inside-a-JVM overhead.
+//! plus a full GUI, without the JVM-inside-a-JVM overhead.
+//!
+//! Running without arguments opens the GUI; `versions` / `launch` remain
+//! available as a scriptable CLI.
 
+mod accounts;
 mod auth;
 mod classpath;
 mod cli;
+mod diagnostics;
+mod gui;
+mod home;
 mod java_locator;
 mod launcher;
+mod logs;
+mod nbt;
+mod net;
+mod news;
+mod profiles;
+mod servers;
+mod settings;
+mod skins;
+mod updater;
 mod version;
 mod version_json;
 
@@ -20,8 +36,9 @@ use cli::{Cli, Command};
 fn main() {
     let cli = Cli::parse();
     let result = match &cli.command {
-        Command::Versions { game_dir } => cmd_versions(game_dir.as_deref()),
-        Command::Launch {
+        None => cmd_gui(),
+        Some(Command::Versions { game_dir }) => cmd_versions(game_dir.as_deref()),
+        Some(Command::Launch {
             version,
             game_dir,
             username,
@@ -29,7 +46,7 @@ fn main() {
             server,
             all_logs,
             dry_run,
-        } => cmd_launch(
+        }) => cmd_launch(
             version,
             game_dir.as_deref(),
             username.as_deref(),
@@ -44,6 +61,47 @@ fn main() {
         eprintln!();
         eprintln!("  [ERROR] {err:#}");
         std::process::exit(1);
+    }
+}
+
+fn cmd_gui() -> Result<()> {
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1100.0, 720.0])
+            .with_min_inner_size([900.0, 600.0])
+            .with_icon(load_icon()),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "RustLauncher",
+        native_options,
+        Box::new(|cc| Ok(Box::new(gui::App::new(cc)))),
+    )
+    .map_err(|e| anyhow::anyhow!("GUI failed: {e}"))
+}
+
+/// A simple built-in window icon (a green "play" triangle).
+fn load_icon() -> egui::IconData {
+    let size = 32usize;
+    let mut rgba = vec![0u8; size * size * 4];
+    for y in 0..size {
+        for x in 0..size {
+            // Triangle with vertices roughly at (8,6), (8,26), (26,16).
+            let inside =
+                (8..=26).contains(&x) && y >= 6 + (x - 8) * 5 / 9 && y <= 26 - (x - 8) * 5 / 9;
+            if inside {
+                let i = (y * size + x) * 4;
+                rgba[i] = 60;
+                rgba[i + 1] = 200;
+                rgba[i + 2] = 90;
+                rgba[i + 3] = 255;
+            }
+        }
+    }
+    egui::IconData {
+        width: size as u32,
+        height: size as u32,
+        rgba,
     }
 }
 
@@ -71,6 +129,7 @@ fn cmd_versions(game_dir: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_launch(
     version_name: &str,
     game_dir: Option<&str>,
@@ -125,30 +184,6 @@ fn cmd_launch(
         println!("  Java:     {major}+ required");
     }
 
-    // Java selection happens inside the plan builder (needs required version).
-    if dry_run {
-        let plan = launcher::build_launch_plan(
-            &root,
-            &found.name,
-            &json,
-            &found.jar,
-            &account,
-            ram,
-            "",
-            None,
-            server,
-            None,
-        )?;
-        println!();
-        println!("  Java: {}", plan.java.display());
-        println!();
-        println!("  Command:");
-        for arg in &plan.args {
-            println!("    {arg}");
-        }
-        return Ok(());
-    }
-
     let plan = launcher::build_launch_plan(
         &root,
         &found.name,
@@ -161,6 +196,17 @@ fn cmd_launch(
         server,
         None,
     )?;
+
+    if dry_run {
+        println!();
+        println!("  Java: {}", plan.java.display());
+        println!();
+        println!("  Command:");
+        for arg in &plan.args {
+            println!("    {arg}");
+        }
+        return Ok(());
+    }
 
     println!();
     println!("========================================");

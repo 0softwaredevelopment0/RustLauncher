@@ -6,11 +6,12 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "rustlauncher",
     version,
-    about = "RustLauncher — launch installed Minecraft versions quickly (offline accounts)"
+    about = "RustLauncher — a Minecraft launcher with GUI (offline accounts)",
+    arg_required_else_help = false
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand)]
