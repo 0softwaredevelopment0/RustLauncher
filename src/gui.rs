@@ -31,6 +31,10 @@ const CONSOLE_CAP: usize = 8000;
 /// A deferred UI mutation produced by a background thread.
 type Job = Box<dyn FnOnce(&mut App) + Send>;
 
+/// Cached loader builds for one (loader, mc-version) pair.
+type LoaderBuildsCache =
+    BTreeMap<(updater::Loader, String), Option<Result<Vec<updater::LoaderBuild>, String>>>;
+
 pub struct App {
     home_dir: PathBuf,
     pub settings: Settings,
@@ -63,6 +67,13 @@ pub struct App {
     pub version_search: String,
     pub install_progress: Arc<Mutex<String>>,
     pub installing: Arc<AtomicBool>,
+    /// Mod loader selected in the Versions tab.
+    pub loader_pick: updater::Loader,
+    /// Builds cached per loader for the release selected by search/filter.
+    pub loader_builds: LoaderBuildsCache,
+    pub loader_builds_loading: bool,
+    /// The loader build chosen in the combo box for the current target.
+    pub loader_selected: Option<String>,
 
     // Servers.
     pub server_status: BTreeMap<usize, String>,
@@ -246,6 +257,10 @@ impl App {
             version_search: String::new(),
             install_progress: Arc::new(Mutex::new(String::new())),
             installing: Arc::new(AtomicBool::new(false)),
+            loader_pick: updater::Loader::Fabric,
+            loader_builds: BTreeMap::new(),
+            loader_builds_loading: false,
+            loader_selected: None,
             server_status: BTreeMap::new(),
             new_server_name: String::new(),
             new_server_addr: String::new(),
@@ -1463,6 +1478,8 @@ impl App {
             .filter(|row| search.is_empty() || row.name.to_lowercase().contains(&search))
             .collect();
 
+        self.ui_loader_row(ui, installing);
+
         ui.separator();
         ui.label(format!(
             "{} shown · {} installed · selected: {}",
@@ -1509,6 +1526,202 @@ impl App {
                 });
             }
         });
+    }
+
+    /// Load (or take from cache) the loader builds for `mc`.
+    fn ensure_loader_builds(&mut self, loader: updater::Loader, mc: &str) {
+        let key = (loader, mc.to_string());
+        if self.loader_builds.contains_key(&key) || self.loader_builds_loading {
+            return;
+        }
+        self.loader_builds_loading = true;
+        let mc_task = mc.to_string();
+        let mc_key = mc.to_string();
+        self.spawn_job(
+            move || {
+                let agent = crate::net::agent();
+                updater::fetch_loader_builds(&agent, loader, &mc_task).map_err(|e| e.to_string())
+            },
+            move |app, result| {
+                app.loader_builds.insert((loader, mc_key), Some(result));
+                app.loader_builds_loading = false;
+            },
+        );
+    }
+
+    fn install_loader(&mut self, mc: String, loader: updater::Loader, build: updater::LoaderBuild) {
+        self.installing.store(true, Ordering::SeqCst);
+        self.install_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        let game_dir = resolve_game_dir(&self.settings);
+        let progress = self.install_progress.clone();
+        let installing = self.installing.clone();
+        let mc_display = mc.clone();
+
+        self.spawn_job(
+            move || {
+                let agent = crate::net::agent();
+                let result =
+                    updater::install_loader(&agent, &game_dir, loader, &mc, &build, &mut |msg| {
+                        *progress.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
+                    });
+                installing.store(false, Ordering::SeqCst);
+                result.map_err(|e| e.to_string())
+            },
+            move |app, result| {
+                let mc = mc_display;
+                match &result {
+                    Ok(outcome) => {
+                        app.settings.selected_version = outcome.version_id.clone();
+                        app.save_settings();
+                        app.log_console(format!(
+                            "[RustLauncher] installed {} ({} new files)",
+                            outcome.version_id, outcome.downloaded_files
+                        ));
+                        app.notify_info(format!(
+                            "{} {} on {mc} is ready to play",
+                            loader.label(),
+                            outcome.version_id
+                        ));
+                    }
+                    Err(e) => {
+                        app.notify_error(
+                            "LOADER-INSTALL",
+                            format!(
+                                "{loader_label} install failed: {e}",
+                                loader_label = loader.label()
+                            ),
+                        );
+                    }
+                }
+                app.reload_versions();
+                app.play_status.clear();
+            },
+        );
+    }
+
+    fn ui_loader_row(&mut self, ui: &mut egui::Ui, installing: bool) {
+        ui.separator();
+        ui.strong("Mod loaders");
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            for l in updater::Loader::ALL {
+                ui.selectable_value(&mut self.loader_pick, l, l.label());
+            }
+        });
+
+        // The Minecraft version loaders install onto: prefer the search box
+        // (exact id), else the selected version, else the latest release
+        // known from the manifest.
+        let manifest_release = match &self.manifest {
+            Some(Ok(m)) => m.latest.get("release").cloned().unwrap_or_default(),
+            _ => String::new(),
+        };
+        let search = self.version_search.trim().to_string();
+        let mc = if !search.is_empty() {
+            search
+        } else if !self.settings.selected_version.is_empty() {
+            self.settings.selected_version.clone()
+        } else {
+            manifest_release
+        };
+        if mc.is_empty() {
+            ui.weak("Load a manifest (or search a version id) to pick a loader build.");
+            return;
+        }
+
+        // Only offer builds when the target is an installed or installable
+        // release; snapshots have no loader coverage and search hits on
+        // snapshot ids would just 404.
+        let known_release = self.versions.iter().any(|v| v.name == mc)
+            || self
+                .manifest
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .is_some_and(|m| m.versions.iter().any(|v| v.id == mc && v.kind == "release"));
+        ui.horizontal(|ui| {
+            ui.label(format!("Target: {}", mc));
+            if !known_release {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "not a known release — loaders may fail",
+                );
+            }
+        });
+
+        self.ensure_loader_builds(self.loader_pick, &mc);
+        let key = (self.loader_pick, mc.clone());
+        let builds_state = self.loader_builds.get(&key);
+        match builds_state {
+            None => {
+                ui.weak(format!("Loading {} builds…", self.loader_pick.label()));
+            }
+            Some(None) => {
+                ui.weak(format!(
+                    "{} is not available for {mc}",
+                    self.loader_pick.label()
+                ));
+            }
+            Some(Some(Err(e))) => {
+                ui.colored_label(egui::Color32::YELLOW, e.to_string());
+            }
+            Some(Some(Ok(builds))) => {
+                let current = self
+                    .loader_builds
+                    .get(&key)
+                    .and_then(|s| s.as_ref().and_then(|r| r.as_ref().ok()))
+                    .map(|b| b.len())
+                    .unwrap_or(0);
+                let _ = current;
+                let selected = self
+                    .loader_selected
+                    .get_or_insert_with(|| builds[0].version.clone())
+                    .clone();
+                let _ = selected;
+                egui::ComboBox::from_label(self.loader_pick.label())
+                    .selected_text(
+                        self.loader_selected
+                            .as_deref()
+                            .unwrap_or(&builds[0].version),
+                    )
+                    .show_ui(ui, |ui| {
+                        for b in builds {
+                            let text = if b.stable {
+                                b.version.clone()
+                            } else {
+                                format!("{} (beta)", b.version)
+                            };
+                            ui.selectable_value(
+                                self.loader_selected
+                                    .get_or_insert_with(|| b.version.clone()),
+                                b.version.clone(),
+                                text,
+                            );
+                        }
+                    });
+                let chosen = self
+                    .loader_selected
+                    .clone()
+                    .unwrap_or_else(|| builds[0].version.clone());
+                if let Some(build) = builds.iter().find(|b| b.version == chosen) {
+                    if ui
+                        .add_enabled(
+                            !installing,
+                            egui::Button::new(format!(
+                                "Install {} {}",
+                                self.loader_pick.label(),
+                                build.version
+                            )),
+                        )
+                        .clicked()
+                    {
+                        self.install_loader(mc.clone(), self.loader_pick, build.clone());
+                    }
+                }
+            }
+        }
     }
 
     fn install_version(&mut self, version: updater::ManifestVersion) {
