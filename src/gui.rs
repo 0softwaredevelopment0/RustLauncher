@@ -166,6 +166,121 @@ fn kind_uses_loader(kind: content::ContentKind) -> bool {
     kind == content::ContentKind::Mod
 }
 
+/// How the version list is ordered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VersionSort {
+    /// Newest first (by manifest order = Mojang's release order).
+    #[default]
+    Newest,
+    /// By version number descending (numeric-aware).
+    Number,
+    /// By release date from the manifest, newest first.
+    ReleaseDate,
+    /// Grouped by loader type, then alphabetically.
+    LoaderType,
+    /// A → Z.
+    Alphabetical,
+    /// Z → A.
+    AlphabeticalReverse,
+}
+
+impl VersionSort {
+    fn label(self) -> &'static str {
+        match self {
+            VersionSort::Newest => "Newest",
+            VersionSort::Number => "By number",
+            VersionSort::ReleaseDate => "By release date",
+            VersionSort::LoaderType => "By loader type",
+            VersionSort::Alphabetical => "A → Z",
+            VersionSort::AlphabeticalReverse => "Z → A",
+        }
+    }
+}
+
+/// Sort the version rows in place according to `sort`.
+pub fn sort_version_rows(rows: &mut [VersionRow], sort: VersionSort) {
+    match sort {
+        VersionSort::Newest => {
+            // The merge keeps manifest order (newest first); stable-sort is
+            // a no-op for manifest rows and moves local rows after them.
+            rows.sort_by(|a, b| {
+                let al = a.loader.is_some() as u8;
+                let bl = b.loader.is_some() as u8;
+                al.cmp(&bl)
+            });
+        }
+        VersionSort::Number => {
+            rows.sort_by(|a, b| cmp_version_desc(&a.name, &b.name));
+        }
+        VersionSort::ReleaseDate => {
+            rows.sort_by(|a, b| {
+                let ad = a
+                    .remote
+                    .as_ref()
+                    .map(|r| r.releaseTime.as_str())
+                    .unwrap_or("");
+                let bd = b
+                    .remote
+                    .as_ref()
+                    .map(|r| r.releaseTime.as_str())
+                    .unwrap_or("");
+                bd.cmp(ad) // newest first
+            });
+        }
+        VersionSort::LoaderType => {
+            rows.sort_by(|a, b| {
+                let al = loader_rank(a);
+                let bl = loader_rank(b);
+                al.cmp(&bl)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
+        }
+        VersionSort::Alphabetical => {
+            rows.sort_by_key(|r| r.name.to_lowercase());
+        }
+        VersionSort::AlphabeticalReverse => {
+            rows.sort_by_key(|r| std::cmp::Reverse(r.name.to_lowercase()));
+        }
+    }
+}
+
+/// Group rank for `By loader type`: Mojang rows first, then by loader.
+fn loader_rank(row: &VersionRow) -> (u8, String) {
+    match row.loader {
+        None => (0, String::new()),
+        Some(l) => (1, l.slug().to_string()),
+    }
+}
+
+/// Numeric-aware descending comparison (`1.21.10` > `1.21.9`).
+fn cmp_version_desc(a: &str, b: &str) -> std::cmp::Ordering {
+    cmp_version_parts_asc(a, b).reverse()
+}
+
+fn cmp_version_parts_asc(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let mut ia = a.split(['.', '-']);
+    let mut ib = b.split(['.', '-']);
+    loop {
+        match (ia.next(), ib.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => {
+                let xn = x.parse::<u64>().ok();
+                let yn = y.parse::<u64>().ok();
+                let ord = match (xn, yn) {
+                    (Some(xn), Some(yn)) => xn.cmp(&yn),
+                    _ => x.to_lowercase().cmp(&y.to_lowercase()),
+                };
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+    }
+}
+
 /// UI state of one mod-platform tab.
 #[derive(Default)]
 struct ContentUi {
@@ -304,6 +419,10 @@ pub struct App {
     pub manifest: Option<Result<Manifest, String>>,
     pub manifest_loading: bool,
     pub version_filter: VersionFilter,
+    /// Filter by specific mod loader (Any / Fabric / Forge / Quilt / NeoForge).
+    pub version_loader_filter: Option<updater::Loader>,
+    /// The order of the version list.
+    pub version_sort: VersionSort,
     pub version_search: String,
     pub install_progress: Arc<Mutex<String>>,
     pub installing: Arc<AtomicBool>,
@@ -589,6 +708,8 @@ impl App {
             manifest: None,
             manifest_loading: false,
             version_filter: VersionFilter::All,
+            version_loader_filter: None,
+            version_sort: VersionSort::Newest,
             version_search: String::new(),
             install_progress: Arc::new(Mutex::new(String::new())),
             installing: Arc::new(AtomicBool::new(false)),
@@ -1793,8 +1914,9 @@ impl App {
             );
         }
 
-        // Top bar: filter tabs, search (with a material magnifier),
-        // rescan/refresh.
+        // ── Filters section (top level, above the list) ──
+        ui.strong("Filters");
+        ui.add_space(2.0);
         ui.horizontal_wrapped(|ui| {
             for filter in [
                 VersionFilter::All,
@@ -1806,6 +1928,13 @@ impl App {
                 VersionFilter::Installed,
             ] {
                 ui.selectable_value(&mut self.version_filter, filter, filter.label());
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Loader:");
+            ui.selectable_value(&mut self.version_loader_filter, None, "Any");
+            for l in updater::Loader::ALL {
+                ui.selectable_value(&mut self.version_loader_filter, Some(l), l.label());
             }
         });
         ui.horizontal(|ui| {
@@ -1822,7 +1951,9 @@ impl App {
                 self.manifest = None;
             }
         });
+        ui.separator();
 
+        // ── Loader installer (top level, above the list) ──
         let installing = self.installing.load(Ordering::SeqCst);
         let progress = self
             .install_progress
@@ -1834,6 +1965,14 @@ impl App {
             ui.add(egui::ProgressBar::new(1.0).animate(true).text("working…"));
             ui.separator();
         }
+        egui::CollapsingHeader::new("Install a mod loader")
+            .id_salt("loader_installer")
+            .default_open(false)
+            .show(ui, |ui| {
+                self.ui_loader_row(ui, installing);
+            });
+        ui.separator();
+
         if let Some(Err(e)) = &self.manifest {
             ui.colored_label(
                 egui::Color32::YELLOW,
@@ -1841,26 +1980,47 @@ impl App {
             );
         }
 
+        // ── Sort bar (same level as the list) ──
+        ui.horizontal(|ui| {
+            ui.weak("Sort:");
+            egui::ComboBox::from_id_salt("version_sort")
+                .selected_text(self.version_sort.label())
+                .width(140.0)
+                .show_ui(ui, |ui| {
+                    for s in [
+                        VersionSort::Newest,
+                        VersionSort::Number,
+                        VersionSort::ReleaseDate,
+                        VersionSort::LoaderType,
+                        VersionSort::Alphabetical,
+                        VersionSort::AlphabeticalReverse,
+                    ] {
+                        ui.selectable_value(&mut self.version_sort, s, s.label());
+                    }
+                });
+            let total = self.versions.len();
+            ui.weak(format!("{} installed", total));
+        });
+
         let manifest_opt = match &self.manifest {
             Some(Ok(manifest)) => Some(manifest),
             _ => None,
         };
         let rows = merge_versions(&self.versions, manifest_opt);
         let search = self.version_search.trim().to_lowercase();
-        let shown: Vec<&VersionRow> = rows
+        let mut shown: Vec<VersionRow> = rows
             .iter()
             .filter(|row| self.version_filter.matches(row))
+            .filter(|row| {
+                self.version_loader_filter.is_none() || row.loader == self.version_loader_filter
+            })
             .filter(|row| search.is_empty() || row.name.to_lowercase().contains(&search))
+            .cloned()
             .collect();
-
-        let shown_mojang = shown.iter().filter(|r| r.loader.is_none()).count();
-        let shown_loaders = shown.iter().filter(|r| r.loader.is_some()).count();
+        sort_version_rows(&mut shown, self.version_sort);
 
         ui.weak(format!(
-            "{} shown ({} Mojang, {} loaders) · selected: {}",
-            shown.len(),
-            shown_mojang,
-            shown_loaders,
+            "selected: {}",
             if self.settings.selected_version.is_empty() {
                 "— none —"
             } else {
@@ -1872,35 +2032,12 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let mut mojang_header_shown = false;
-                let mut loaders_header_shown = false;
                 for row in shown.iter() {
-                    if row.loader.is_none() && !mojang_header_shown {
-                        ui.strong("Mojang");
-                        mojang_header_shown = true;
-                    }
-                    if row.loader.is_some() && !loaders_header_shown {
-                        ui.add_space(4.0);
-                        ui.strong("Mod loaders");
-                        loaders_header_shown = true;
-                    }
                     self.version_row_ui(ui, row, installing);
                 }
                 if shown.is_empty() {
                     ui.weak("No versions match the current filter.");
                 }
-
-                // The loader installer collapses into a section at the
-                // bottom of the list so it never pushes versions around.
-                ui.add_space(6.0);
-                ui.separator();
-                let header = egui::CollapsingHeader::new("Install a mod loader")
-                    .id_salt("loader_installer")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        self.ui_loader_row(ui, installing);
-                    });
-                let _ = header;
             });
     }
 
@@ -3391,5 +3528,92 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn version_sort_orders() {
+        let make = |name: &str, date: &str| VersionRow {
+            name: name.into(),
+            kind: "release".into(),
+            installed: false,
+            is_latest_release: false,
+            remote: Some(updater::ManifestVersion {
+                id: name.into(),
+                kind: "release".into(),
+                url: String::new(),
+                releaseTime: date.into(),
+            }),
+            loader: loader_of(name),
+        };
+        let mut rows = vec![
+            make("1.20", "2023-06-07"),
+            make("fabric-loader-0.15.0-1.21", ""),
+            make("1.21.4", "2024-12-03"),
+            make("1.21.10", "2025-06-01"),
+        ];
+
+        // Alphabetical.
+        sort_version_rows(&mut rows, VersionSort::Alphabetical);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names[0], "1.20");
+
+        // A→Z starts with the digit-prefixed names in numeric order.
+        sort_version_rows(&mut rows, VersionSort::AlphabeticalReverse);
+        assert_eq!(rows.last().unwrap().name, "1.20");
+
+        // Numeric-aware by number: 1.21.10 > 1.21.4 > 1.21... > 1.20.
+        sort_version_rows(&mut rows, VersionSort::Number);
+        assert_eq!(rows[0].name, "fabric-loader-0.15.0-1.21");
+        assert_eq!(rows[1].name, "1.21.10");
+        assert_eq!(rows[2].name, "1.21.4");
+        assert_eq!(rows[3].name, "1.20");
+
+        // By release date (newest first, rows without dates go last).
+        sort_version_rows(&mut rows, VersionSort::ReleaseDate);
+        assert_eq!(rows[0].name, "1.21.10");
+        assert_eq!(rows[1].name, "1.21.4");
+        assert_eq!(rows[2].name, "1.20");
+
+        // By loader type: Mojang rows first, then loaders alphabetically
+        // (fabric < forge).
+        sort_version_rows(&mut rows, VersionSort::LoaderType);
+        assert_eq!(rows[0].loader, None);
+        assert_eq!(rows[1].loader, None);
+        assert_eq!(rows[2].loader, None);
+        assert_eq!(rows[3].loader, Some(updater::Loader::Fabric));
+    }
+
+    #[test]
+    fn version_number_compare_is_numeric() {
+        use std::cmp::Ordering;
+        assert_eq!(cmp_version_parts_asc("1.21.9", "1.21.10"), Ordering::Less);
+        assert_eq!(cmp_version_parts_asc("1.20", "1.20.1"), Ordering::Less);
+        assert_eq!(cmp_version_parts_asc("1.21.4", "1.21.4"), Ordering::Equal);
+        assert_eq!(cmp_version_parts_asc("a1.2", "1.2"), Ordering::Greater);
+    }
+
+    #[test]
+    fn version_filter_by_loader_matches_exactly() {
+        let mut rows = vec![
+            VersionRow {
+                name: "1.21.4".into(),
+                kind: "release".into(),
+                installed: false,
+                is_latest_release: false,
+                remote: None,
+                loader: None,
+            },
+            VersionRow {
+                name: "fabric-loader-0.19.5-1.21.4".into(),
+                kind: "loader".into(),
+                installed: true,
+                is_latest_release: false,
+                remote: None,
+                loader: Some(updater::Loader::Fabric),
+            },
+        ];
+        rows.retain(|r| r.loader == Some(updater::Loader::Fabric));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "fabric-loader-0.19.5-1.21.4");
     }
 }
