@@ -1856,44 +1856,52 @@ impl App {
         let shown_mojang = shown.iter().filter(|r| r.loader.is_none()).count();
         let shown_loaders = shown.iter().filter(|r| r.loader.is_some()).count();
 
-        ui.label(format!(
-            "{} shown ({} Mojang, {} loaders) · {} installed · selected: {}",
+        ui.weak(format!(
+            "{} shown ({} Mojang, {} loaders) · selected: {}",
             shown.len(),
             shown_mojang,
             shown_loaders,
-            self.versions.len(),
             if self.settings.selected_version.is_empty() {
                 "— none —"
             } else {
                 &self.settings.selected_version
             }
         ));
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            // Group 1: Mojang versions (vanilla manifest + local non-loader).
-            let mut mojang_header_shown = false;
-            let mut loaders_header_shown = false;
-            for row in shown.iter() {
-                if row.loader.is_none() && !mojang_header_shown {
-                    ui.strong("Mojang");
-                    mojang_header_shown = true;
-                }
-                if row.loader.is_some() && !loaders_header_shown {
-                    ui.add_space(4.0);
-                    ui.strong("Mod loaders");
-                    loaders_header_shown = true;
-                }
-                self.version_row_ui(ui, row, installing);
-            }
-            if shown.is_empty() {
-                ui.weak("No versions match the current filter.");
-            }
-        });
 
-        // The loader installer lives at the bottom, as its own section:
-        // pick a Mojang release + a loader build and hit Install.
-        ui.add_space(6.0);
-        ui.separator();
-        self.ui_loader_row(ui, installing);
+        // The version list takes all remaining space.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let mut mojang_header_shown = false;
+                let mut loaders_header_shown = false;
+                for row in shown.iter() {
+                    if row.loader.is_none() && !mojang_header_shown {
+                        ui.strong("Mojang");
+                        mojang_header_shown = true;
+                    }
+                    if row.loader.is_some() && !loaders_header_shown {
+                        ui.add_space(4.0);
+                        ui.strong("Mod loaders");
+                        loaders_header_shown = true;
+                    }
+                    self.version_row_ui(ui, row, installing);
+                }
+                if shown.is_empty() {
+                    ui.weak("No versions match the current filter.");
+                }
+
+                // The loader installer collapses into a section at the
+                // bottom of the list so it never pushes versions around.
+                ui.add_space(6.0);
+                ui.separator();
+                let header = egui::CollapsingHeader::new("Install a mod loader")
+                    .id_salt("loader_installer")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        self.ui_loader_row(ui, installing);
+                    });
+                let _ = header;
+            });
     }
 
     /// Render one row of the version list (Select / Install controls).
