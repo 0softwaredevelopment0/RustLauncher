@@ -48,6 +48,8 @@ pub struct App {
     pub console_seq: usize,
     pub game_running: Arc<AtomicBool>,
     game_log: Arc<Mutex<Option<SessionLog>>>,
+    /// PID of the running game's java process, shared with the launch thread.
+    game_pid: Arc<Mutex<Option<u32>>>,
 
     // Version list (merged local + remote).
     pub manifest: Option<Result<Manifest, String>>,
@@ -91,7 +93,7 @@ pub struct App {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
-    Play,
+    General,
     Console,
     Versions,
     Servers,
@@ -208,13 +210,14 @@ impl App {
             accounts,
             servers,
             versions,
-            screen: Screen::Play,
+            screen: Screen::General,
             play_status: String::new(),
             launch_error: None,
             console: Arc::new(Mutex::new(Vec::new())),
             console_seq: 0,
             game_running: Arc::new(AtomicBool::new(false)),
             game_log: Arc::new(Mutex::new(None)),
+            game_pid: Arc::new(Mutex::new(None)),
             manifest: None,
             manifest_loading: false,
             version_filter: VersionFilter::All,
@@ -416,6 +419,7 @@ impl App {
         let console = self.console.clone();
         let running = self.game_running.clone();
         let game_log = self.game_log.clone();
+        let game_pid = self.game_pid.clone();
         let save_log = settings.save_console_log;
         let home_dir = self.home_dir.clone();
 
@@ -427,7 +431,7 @@ impl App {
             move || {
                 let result = run_game_process(
                     &game_dir, &version, &account, &settings, console, save_log, &home_dir,
-                    game_log,
+                    game_log, game_pid,
                 );
                 running.store(false, Ordering::SeqCst);
                 result
@@ -439,21 +443,62 @@ impl App {
                     } else {
                         format!("Game exited with code {code}")
                     };
+                    *app.game_pid.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 }
                 Err(e) => {
                     app.play_status.clear();
                     app.launch_error = Some(format!("{e:#}"));
+                    *app.game_pid.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 }
             },
         );
     }
 
     fn stop_game(&mut self) {
-        // The process handle lives in the launch thread; request termination
-        // through the shared log slot is not possible, so we simply record
-        // intent (the kill path is exposed via the console taskkill helper).
-        self.play_status = "Stop requested (the game may take a moment to close)".into();
-        self.log_console("[RustLauncher] Stop requested by user");
+        // Ask the game to close politely (like clicking the window's X):
+        // taskkill without /F posts WM_CLOSE; the JVM shuts down hooks and exits.
+        let pid = *self.game_pid.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pid) = pid {
+            match std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string()])
+                .output()
+            {
+                Ok(_) => self.log_console(format!("[RustLauncher] Stop requested (PID {pid})")),
+                Err(e) => self.log_console(format!("[RustLauncher] Stop failed: {e}")),
+            }
+        } else {
+            self.log_console("[RustLauncher] Stop: no running game process");
+        }
+        self.play_status = "Stop requested".into();
+    }
+
+    /// Force-kill the game process tree (taskkill /T /F) — the last resort.
+    fn kill_game(&mut self) {
+        let pid = *self.game_pid.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pid) = pid {
+            self.log_console(format!(
+                "[RustLauncher] Kill: terminating PID {pid} and its child processes"
+            ));
+            match std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .output()
+            {
+                Ok(out) => {
+                    if out.status.success() {
+                        self.log_console("[RustLauncher] Game process tree terminated");
+                    } else {
+                        self.log_console(format!(
+                            "[RustLauncher] taskkill failed: {}",
+                            String::from_utf8_lossy(&out.stderr).trim()
+                        ));
+                    }
+                }
+                Err(e) => self.log_console(format!("[RustLauncher] Kill failed: {e}")),
+            }
+        } else {
+            self.log_console("[RustLauncher] Kill: no running game process");
+        }
+        self.play_status = "Kill issued".into();
     }
 
     // ── per-frame plumbing ─────────────────────────────────────
@@ -494,6 +539,7 @@ fn run_game_process(
     save_log: bool,
     home_dir: &std::path::Path,
     game_log: Arc<Mutex<Option<SessionLog>>>,
+    game_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<i32> {
     let json = VersionJson::load(&version.json)?;
     let plan = launcher::build_launch_plan(
@@ -540,13 +586,17 @@ fn run_game_process(
         ),
     );
 
-    let code = spawn_and_stream(&plan, console)?;
+    let code = spawn_and_stream(&plan, console, game_pid)?;
     *game_log.lock().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(code)
 }
 
 /// Run the plan, streaming output lines into the console buffer.
-fn spawn_and_stream(plan: &LaunchPlan, console: Arc<Mutex<Vec<String>>>) -> Result<i32> {
+fn spawn_and_stream(
+    plan: &LaunchPlan,
+    console: Arc<Mutex<Vec<String>>>,
+    game_pid: Arc<Mutex<Option<u32>>>,
+) -> Result<i32> {
     use std::io::BufRead;
     use std::process::{Command, Stdio};
 
@@ -557,6 +607,9 @@ fn spawn_and_stream(plan: &LaunchPlan, console: Arc<Mutex<Vec<String>>>) -> Resu
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("failed to start {}", plan.java.display()))?;
+
+    // Publish the PID so Stop/Kill can act on it.
+    *game_pid.lock().unwrap_or_else(|e| e.into_inner()) = Some(child.id());
 
     let stdout = child.stdout.take().context("no stdout")?;
     let stderr = child.stderr.take().context("no stderr")?;
@@ -606,7 +659,7 @@ impl eframe::App for App {
             ui.heading("RustLauncher");
             ui.add_space(8.0);
             for (screen, label) in [
-                (Screen::Play, "▶  Play"),
+                (Screen::General, "▶  General"),
                 (Screen::Console, "▤  Console"),
                 (Screen::Versions, "☰  Versions"),
                 (Screen::Servers, "⛶  Servers"),
@@ -636,7 +689,7 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.screen {
-            Screen::Play => self.ui_play(ui),
+            Screen::General => self.ui_general(ui),
             Screen::Console => self.ui_console(ui),
             Screen::Versions => self.ui_versions(ui),
             Screen::Servers => self.ui_servers(ui),
@@ -652,8 +705,8 @@ impl eframe::App for App {
 // ── screens ────────────────────────────────────────────────────
 
 impl App {
-    fn ui_play(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Play");
+    fn ui_general(&mut self, ui: &mut egui::Ui) {
+        ui.heading("General");
         ui.add_space(6.0);
 
         egui::Grid::new("play_grid").num_columns(2).show(ui, |ui| {
@@ -710,6 +763,16 @@ impl App {
             }
             if ui.button("Stop").clicked() {
                 self.stop_game();
+            }
+            let kill_enabled = self.game_running.load(Ordering::SeqCst);
+            let kill =
+                egui::Button::new(egui::RichText::new("☠ Kill").color(egui::Color32::LIGHT_RED));
+            if ui
+                .add_enabled(kill_enabled, kill)
+                .on_disabled_hover_text("The game is not running")
+                .clicked()
+            {
+                self.kill_game();
             }
         });
 
