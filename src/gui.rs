@@ -543,7 +543,10 @@ impl App {
         self.toasts.tick(dt);
     }
 
-    /// Render the toast stack at the bottom-left corner.
+    /// Render the toast stack anchored to the bottom-left corner of the
+    /// screen. Each toast is its own Area anchored at LEFT_BOTTOM, offset
+    /// upward by the measured heights of the toasts above it, so the stack
+    /// always hugs the corner regardless of screen size.
     fn show_toasts(&mut self, ctx: &egui::Context) {
         // Deferred actions: mutating self inside the Area closure fights the
         // outer borrow, so collect and apply them after the UI pass.
@@ -554,26 +557,31 @@ impl App {
         }
         let mut actions: Vec<Action> = Vec::new();
 
-        egui::Area::new(egui::Id::new("toasts"))
-            .order(egui::Order::Tooltip)
-            .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -12.0])
-            .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 6.0;
-                // Newest on top → iterate the queue in reverse.
-                for i in (0..self.toasts.items().len()).rev() {
-                    let toast = &self.toasts.items()[i];
-                    let offset = toast.slide_offset();
-                    let (close_pressed, body_clicked) = toast_body(ui, toast, offset, i);
-                    if close_pressed {
-                        actions.push(Action::Close(i));
-                    } else if body_clicked {
-                        actions.push(Action::Pin(i));
-                        if toast.kind == ToastKind::Error {
-                            actions.push(Action::OpenLogs);
-                        }
-                    }
+        const MARGIN: f32 = 12.0;
+        const GAP: f32 = 8.0;
+
+        // Newest on top: iterate the queue in reverse, stacking each toast
+        // below the previous one.
+        let mut y_offset: f32 = 0.0;
+        for i in (0..self.toasts.items().len()).rev() {
+            let kind = self.toasts.items()[i].kind;
+            let slide = self.toasts.items()[i].slide_offset();
+            let anchor_y = -MARGIN - y_offset;
+            let (close_pressed, body_clicked, height) =
+                self.toast_area(ctx, i, egui::vec2(MARGIN + slide, anchor_y));
+            if close_pressed {
+                actions.push(Action::Close(i));
+            } else if body_clicked {
+                actions.push(Action::Pin(i));
+                if kind == ToastKind::Error {
+                    actions.push(Action::OpenLogs);
                 }
-            });
+            }
+            // Stack the next (older) toast below this one; fall back to an
+            // estimate until the first render has measured the real height.
+            let h = if height > 0.0 { height } else { 70.0 };
+            y_offset += h + GAP;
+        }
 
         for action in actions {
             match action {
@@ -586,6 +594,35 @@ impl App {
                 Action::OpenLogs => self.screen = Screen::Console,
             }
         }
+    }
+
+    /// Render one toast in its own bottom-left-anchored Area; returns
+    /// `(close_clicked, body_clicked, measured_height)`.
+    fn toast_area(
+        &mut self,
+        ctx: &egui::Context,
+        index: usize,
+        anchor_offset: egui::Vec2,
+    ) -> (bool, bool, f32) {
+        let toast = &self.toasts.items()[index];
+        let alpha = toast.visual_alpha();
+        let kind = toast.kind;
+        let id = egui::Id::new(("toast", index));
+
+        let (close_clicked, body_clicked, size) = egui::Area::new(id)
+            .order(egui::Order::Tooltip)
+            .anchor(egui::Align2::LEFT_BOTTOM, anchor_offset)
+            .show(ctx, |ui| {
+                ui.multiply_opacity(alpha);
+                toast_body(ui, toast, kind, index)
+            })
+            .inner;
+
+        // Record the measured height for the next frame's stacking.
+        if let Some(t) = self.toasts.items_mut().get_mut(index) {
+            t.set_height(size.y);
+        }
+        (close_clicked, body_clicked, size.y)
     }
 
     fn stop_game(&mut self) {
@@ -855,17 +892,22 @@ fn spawn_and_stream(
     Ok(status.code().unwrap_or(-1))
 }
 
-/// Draw one toast card; returns `(close_clicked, body_clicked)`.
-fn toast_body(ui: &mut egui::Ui, toast: &Toast, slide_offset: f32, index: usize) -> (bool, bool) {
+/// Draw one toast card; returns `(close_clicked, body_clicked, size)`.
+fn toast_body(
+    ui: &mut egui::Ui,
+    toast: &Toast,
+    kind: ToastKind,
+    index: usize,
+) -> (bool, bool, egui::Vec2) {
     let mut close_clicked = false;
     let mut body_clicked = false;
 
-    egui::Frame::popup(ui.style())
-        .fill(match toast.kind {
+    let size = egui::Frame::popup(ui.style())
+        .fill(match kind {
             ToastKind::Error => egui::Color32::from_rgb(0x3B, 0x2E, 0x2A), // warm dark red-brown
             ToastKind::Info => ui.style().visuals.widgets.inactive.bg_fill,
         })
-        .stroke(match toast.kind {
+        .stroke(match kind {
             ToastKind::Error => {
                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0xE5, 0x7F, 0x62))
             }
@@ -874,50 +916,74 @@ fn toast_body(ui: &mut egui::Ui, toast: &Toast, slide_offset: f32, index: usize)
         .show(ui, |ui| {
             ui.set_min_width(320.0);
             ui.set_max_width(360.0);
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    match toast.kind {
-                        ToastKind::Error => draw_warning_triangle(ui, 24.0),
-                        ToastKind::Info => draw_info_icon(ui, 24.0),
+            ui.horizontal(|ui| {
+                match kind {
+                    ToastKind::Error => draw_warning_triangle(ui, 24.0),
+                    ToastKind::Info => draw_info_icon(ui, 24.0),
+                }
+                ui.add_space(2.0);
+                ui.vertical(|ui| {
+                    ui.set_min_width(240.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&toast.title).strong());
+                        if let Some(code) = &toast.code {
+                            ui.label(egui::RichText::new(format!("[{code}]")).weak().monospace());
+                        }
+                    });
+                    if let Some(detail) = &toast.detail {
+                        ui.label(egui::RichText::new(detail).monospace().small().weak());
                     }
-                    ui.add_space(2.0);
-                    ui.vertical(|ui| {
-                        ui.set_min_width(240.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&toast.title).strong());
-                            if let Some(code) = &toast.code {
-                                ui.label(
-                                    egui::RichText::new(format!("[{code}]")).weak().monospace(),
-                                );
-                            }
-                        });
-                        if let Some(detail) = &toast.detail {
-                            ui.label(egui::RichText::new(detail).monospace().small().weak());
-                        }
-                    });
+                });
 
-                    // The ✕ button, top-right: always available, even when
-                    // the toast is pinned.
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        if ui.small_button("✕").clicked() {
-                            close_clicked = true;
-                        }
-                    });
+                // A frameless ✕ button (transparent hit area, painted
+                // material cross), top-right: always available, even when
+                // the toast is pinned.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close_id = egui::Id::new(("toast_close", index));
+                    let (close_rect, close_resp) =
+                        ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+                    ui.painter_at(close_rect)
+                        .add(draw_material_cross(close_rect, close_resp.hovered()));
+                    if close_resp.clicked() {
+                        close_clicked = true;
+                    }
+                    ui.data_mut(|d| d.insert_temp(close_id, close_resp.clicked()));
                 });
             });
-        });
+        })
+        .response
+        .rect
+        .size();
 
-    // Left-click anywhere on the card (not on ✕): pin + open logs.
+    // Left-click anywhere on the card body (not on ✕): pin + open logs.
     let interact = ui.interact(
-        ui.min_rect().intersect(ui.max_rect()),
+        ui.min_rect(),
         egui::Id::new(("toast_body", index)),
         egui::Sense::click(),
     );
-    if interact.clicked() {
+    if interact.clicked() && !close_clicked {
         body_clicked = true;
     }
-    let _ = slide_offset;
-    (close_clicked, body_clicked)
+    (close_clicked, body_clicked, size)
+}
+
+/// A material-style ✕ cross shape for the given square rect.
+fn draw_material_cross(rect: egui::Rect, hovered: bool) -> egui::Shape {
+    let color = if hovered {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::GRAY
+    };
+    let stroke = egui::Stroke::new(1.6_f32, color);
+    let inset = rect.width() * 0.28;
+    let a = egui::pos2(rect.left() + inset, rect.top() + inset);
+    let b = egui::pos2(rect.right() - inset, rect.bottom() - inset);
+    let c = egui::pos2(rect.right() - inset, rect.top() + inset);
+    let d = egui::pos2(rect.left() + inset, rect.bottom() - inset);
+    egui::Shape::Vec(vec![
+        egui::Shape::line_segment([a, b], stroke),
+        egui::Shape::line_segment([c, d], stroke),
+    ])
 }
 
 /// The last `n` lines of a text file, if it can be read.

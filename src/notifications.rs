@@ -14,6 +14,9 @@ pub const TOAST_HOLD_SECS: f32 = 5.0;
 /// Seconds an unpinned toast takes to slide right off-screen.
 pub const TOAST_SLIDE_SECS: f32 = 1.2;
 
+/// Seconds a fresh toast takes to fade in.
+pub const TOAST_APPEAR_SECS: f32 = 0.25;
+
 /// What kind of notification a toast carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
@@ -37,6 +40,8 @@ pub struct Toast {
     age: f32,
     /// Pinned by a left-click: stops aging until dismissed.
     pinned: bool,
+    /// Height measured during the last render; used to stack toasts.
+    height: f32,
 }
 
 impl Toast {
@@ -48,6 +53,7 @@ impl Toast {
             detail,
             age: 0.0,
             pinned: false,
+            height: 0.0,
         }
     }
 
@@ -59,6 +65,7 @@ impl Toast {
             detail: None,
             age: 0.0,
             pinned: false,
+            height: 0.0,
         }
     }
 
@@ -93,6 +100,33 @@ impl Toast {
         } else {
             let t = (self.age - TOAST_HOLD_SECS) / TOAST_SLIDE_SECS;
             t * t * 600.0 // ease-in slide
+        }
+    }
+
+    /// Opacity for rendering: fades in on spawn and out while sliding away.
+    pub fn visual_alpha(&self) -> f32 {
+        if self.pinned {
+            return 1.0;
+        }
+        if self.age < TOAST_APPEAR_SECS {
+            (self.age / TOAST_APPEAR_SECS).clamp(0.0, 1.0)
+        } else if self.age > TOAST_HOLD_SECS {
+            (1.0 - (self.age - TOAST_HOLD_SECS) / TOAST_SLIDE_SECS).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// The height measured during the last render (0 = not rendered yet).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
+    pub fn set_height(&mut self, height: f32) {
+        if height > 0.0 {
+            self.height = height;
         }
     }
 }
@@ -160,6 +194,18 @@ mod tests {
         }
         assert_eq!(t.age(), 0.0);
         assert_eq!(t.slide_offset(), 0.0);
+    }
+
+    #[test]
+    fn visual_alpha_fades_in_and_out() {
+        let mut t = Toast::info("x");
+        t.tick(0.05); // mid fade-in
+        assert!(t.visual_alpha() > 0.0 && t.visual_alpha() < 1.0);
+        t.tick(1.0); // fully visible
+        assert_eq!(t.visual_alpha(), 1.0);
+        let mut t2 = Toast::info("x");
+        t2.tick(TOAST_HOLD_SECS + TOAST_SLIDE_SECS / 2.0);
+        assert!(t2.visual_alpha() > 0.0 && t2.visual_alpha() < 1.0);
     }
 
     #[test]
