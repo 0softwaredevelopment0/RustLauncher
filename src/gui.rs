@@ -16,6 +16,7 @@ use crate::home::{self};
 use crate::launcher::{self, LaunchPlan};
 use crate::logs::SessionLog;
 use crate::news::{self, NewsItem};
+use crate::notifications::{Toast, ToastKind, Toasts};
 use crate::profiles;
 use crate::servers::{self, ServerStore};
 use crate::settings::Settings;
@@ -93,6 +94,14 @@ pub struct App {
     jobs: Arc<Mutex<Vec<Job>>>,
     /// Handle used by background threads to wake the UI when a job finishes.
     ctx: egui::Context,
+
+    // Toast notifications (bottom-left).
+    toasts: Toasts,
+    /// Last frame instant, for advancing toast aging.
+    last_frame: Option<std::time::Instant>,
+    /// Launcher error log (logs/launcher-N.log), written at startup and on
+    /// every launcher error so toasts can show its tail.
+    launcher_log: Option<SessionLog>,
 }
 
 /// Which destructive action the confirmation dialog is guarding.
@@ -253,10 +262,14 @@ impl App {
             profile_error: None,
             jobs: Arc::new(Mutex::new(Vec::new())),
             ctx,
+            toasts: Toasts::default(),
+            last_frame: None,
+            launcher_log: None,
         };
         app.refresh_skins();
         app.select_saved_skin();
         app.fetch_news();
+        app.start_launcher_log();
         app
     }
 
@@ -439,6 +452,7 @@ impl App {
         running.store(true, Ordering::SeqCst);
         self.screen = Screen::Console;
         self.play_status = format!("Launching {} …", version.name);
+        self.notify_info(format!("Starting {} …", version.name));
 
         self.spawn_job(
             move || {
@@ -456,28 +470,141 @@ impl App {
                     } else {
                         format!("Game exited with code {code}")
                     };
+                    if code == 0 {
+                        app.notify_info("Game stopped");
+                    } else {
+                        app.notify_error("GAME-EXIT", format!("Game exited with code {code}"));
+                    }
                     *app.game_pid.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 }
                 Err(e) => {
                     app.play_status.clear();
                     app.launch_error = Some(format!("{e:#}"));
+                    app.notify_error("LAUNCH", format!("{e:#}"));
                     *app.game_pid.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 }
             },
         );
     }
 
+    // ── launcher error log & toasts ──────────────────────
+
+    /// Open `logs/launcher-N.log` for the whole app lifetime; every launcher
+    /// error is written there so error toasts can show its tail.
+    fn start_launcher_log(&mut self) {
+        match SessionLog::start(&home::logs_dir(&self.home_dir), "launcher") {
+            Ok(log) => {
+                log.write(&format!(
+                    "[Log] RustLauncher {} started",
+                    env!("CARGO_PKG_VERSION")
+                ));
+                self.launcher_log = Some(log);
+            }
+            Err(e) => eprintln!("[RustLauncher] launcher log failed: {e:#}"),
+        }
+    }
+
+    /// Record a launcher error: to the launcher log, console and as a toast.
+    fn notify_error(&mut self, code: &str, message: impl std::fmt::Display) {
+        let line = format!("[ERROR {code}] {message}");
+        if let Some(log) = &self.launcher_log {
+            log.write(&line);
+        }
+        self.log_console(line.clone());
+
+        // Last 3 lines of the launcher log file for the toast detail.
+        let detail = self
+            .launcher_log
+            .as_ref()
+            .map(|log| log.path.clone())
+            .and_then(|path| tail_lines(&path, 3));
+
+        self.toasts.push(Toast::error(
+            "An error occurred",
+            Some(code.to_string()),
+            detail,
+        ));
+    }
+
+    /// Push an informational toast (game started/stopped etc.).
+    fn notify_info(&mut self, title: impl Into<String>) {
+        self.toasts.push(Toast::info(title));
+    }
+
+    /// Advance toast aging; called once per frame.
+    fn tick_toasts(&mut self) {
+        let now = std::time::Instant::now();
+        let dt = self
+            .last_frame
+            .take()
+            .map(|t| now.duration_since(t).as_secs_f32())
+            .unwrap_or(0.0);
+        self.last_frame = Some(now);
+        self.toasts.tick(dt);
+    }
+
+    /// Render the toast stack at the bottom-left corner.
+    fn show_toasts(&mut self, ctx: &egui::Context) {
+        // Deferred actions: mutating self inside the Area closure fights the
+        // outer borrow, so collect and apply them after the UI pass.
+        enum Action {
+            Pin(usize),
+            Close(usize),
+            OpenLogs,
+        }
+        let mut actions: Vec<Action> = Vec::new();
+
+        egui::Area::new(egui::Id::new("toasts"))
+            .order(egui::Order::Tooltip)
+            .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -12.0])
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                // Newest on top → iterate the queue in reverse.
+                for i in (0..self.toasts.items().len()).rev() {
+                    let toast = &self.toasts.items()[i];
+                    let offset = toast.slide_offset();
+                    let (close_pressed, body_clicked) = toast_body(ui, toast, offset, i);
+                    if close_pressed {
+                        actions.push(Action::Close(i));
+                    } else if body_clicked {
+                        actions.push(Action::Pin(i));
+                        if toast.kind == ToastKind::Error {
+                            actions.push(Action::OpenLogs);
+                        }
+                    }
+                }
+            });
+
+        for action in actions {
+            match action {
+                Action::Close(i) => self.toasts.remove(i),
+                Action::Pin(i) => {
+                    if let Some(t) = self.toasts.items_mut().get_mut(i) {
+                        t.pin();
+                    }
+                }
+                Action::OpenLogs => self.screen = Screen::Console,
+            }
+        }
+    }
+
     fn stop_game(&mut self) {
-        // Ask the game to close politely (like clicking the window's X):
-        // taskkill without /F posts WM_CLOSE; the JVM shuts down hooks and exits.
+        // Ask the game to close politely (like the window's X):
+        // taskkill without /F posts WM_CLOSE; the JVM runs shutdown hooks.
         let pid = *self.game_pid.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pid) = pid {
             match std::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string()])
                 .output()
             {
-                Ok(_) => self.log_console(format!("[RustLauncher] Stop requested (PID {pid})")),
-                Err(e) => self.log_console(format!("[RustLauncher] Stop failed: {e}")),
+                Ok(_) => {
+                    self.log_console(format!("[RustLauncher] Stop requested (PID {pid})"));
+                    self.notify_info("Stopping game…");
+                }
+                Err(e) => {
+                    self.log_console(format!("[RustLauncher] Stop failed: {e}"));
+                    self.notify_error("STOP", format!("{e:#}"));
+                }
             }
         } else {
             self.log_console("[RustLauncher] Stop: no running game process");
@@ -579,14 +706,17 @@ impl App {
                 Ok(out) => {
                     if out.status.success() {
                         self.log_console("[RustLauncher] Game process tree terminated");
+                        self.notify_info("Game killed");
                     } else {
-                        self.log_console(format!(
-                            "[RustLauncher] taskkill failed: {}",
-                            String::from_utf8_lossy(&out.stderr).trim()
-                        ));
+                        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        self.log_console(format!("[RustLauncher] taskkill failed: {stderr}"));
+                        self.notify_error("KILL", stderr);
                     }
                 }
-                Err(e) => self.log_console(format!("[RustLauncher] Kill failed: {e}")),
+                Err(e) => {
+                    self.log_console(format!("[RustLauncher] Kill failed: {e}"));
+                    self.notify_error("KILL", format!("{e:#}"));
+                }
             }
         } else {
             self.log_console("[RustLauncher] Kill: no running game process");
@@ -725,6 +855,93 @@ fn spawn_and_stream(
     Ok(status.code().unwrap_or(-1))
 }
 
+/// Draw one toast card; returns `(close_clicked, body_clicked)`.
+fn toast_body(ui: &mut egui::Ui, toast: &Toast, slide_offset: f32, index: usize) -> (bool, bool) {
+    let mut close_clicked = false;
+    let mut body_clicked = false;
+
+    egui::Frame::popup(ui.style())
+        .fill(match toast.kind {
+            ToastKind::Error => egui::Color32::from_rgb(0x3B, 0x2E, 0x2A), // warm dark red-brown
+            ToastKind::Info => ui.style().visuals.widgets.inactive.bg_fill,
+        })
+        .stroke(match toast.kind {
+            ToastKind::Error => {
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0xE5, 0x7F, 0x62))
+            }
+            ToastKind::Info => ui.style().visuals.widgets.inactive.bg_stroke,
+        })
+        .show(ui, |ui| {
+            ui.set_min_width(320.0);
+            ui.set_max_width(360.0);
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    match toast.kind {
+                        ToastKind::Error => draw_warning_triangle(ui, 24.0),
+                        ToastKind::Info => {
+                            ui.label(egui::RichText::new("ℹ").size(20.0));
+                        }
+                    }
+                    ui.add_space(2.0);
+                    ui.vertical(|ui| {
+                        ui.set_min_width(240.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&toast.title).strong());
+                            if let Some(code) = &toast.code {
+                                ui.label(
+                                    egui::RichText::new(format!("[{code}]")).weak().monospace(),
+                                );
+                            }
+                        });
+                        if let Some(detail) = &toast.detail {
+                            ui.label(egui::RichText::new(detail).monospace().small().weak());
+                        }
+                    });
+
+                    // The ✕ button, top-right: always available, even when
+                    // the toast is pinned.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        if ui.small_button("✕").clicked() {
+                            close_clicked = true;
+                        }
+                    });
+                });
+            });
+        });
+
+    // Left-click anywhere on the card (not on ✕): pin + open logs.
+    let interact = ui.interact(
+        ui.min_rect().intersect(ui.max_rect()),
+        egui::Id::new(("toast_body", index)),
+        egui::Sense::click(),
+    );
+    if interact.clicked() {
+        body_clicked = true;
+    }
+    let _ = slide_offset;
+    (close_clicked, body_clicked)
+}
+
+/// The last `n` lines of a text file, if it can be read.
+fn tail_lines(path: &std::path::Path, n: usize) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let start = content.len().saturating_sub(n.saturating_mul(80));
+    let window = &content[start.min(content.len())..];
+    let lines: Vec<&str> = window
+        .lines()
+        .rev()
+        .take(n)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
 fn push_line(console: &Arc<Mutex<Vec<String>>>, line: String) {
     let mut buf = console.lock().unwrap_or_else(|e| e.into_inner());
     buf.push(line);
@@ -773,6 +990,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.apply_pending_jobs();
         self.sync_visuals(ctx);
+        self.tick_toasts();
 
         // Repaint while the game runs or a download is in progress so the
         // console and progress labels keep moving without user input.
@@ -780,6 +998,11 @@ impl eframe::App for App {
             self.game_running.load(Ordering::SeqCst) || self.installing.load(Ordering::SeqCst);
         if busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
+        }
+
+        // Toasts animate (slide-out) and must keep repainting while visible.
+        if !self.toasts.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(66));
         }
 
         egui::SidePanel::left("nav").show(ctx, |ui| {
@@ -815,6 +1038,8 @@ impl eframe::App for App {
                 ui.colored_label(egui::Color32::LIGHT_GREEN, "Game running");
             }
         });
+
+        self.show_toasts(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| match self.screen {
             Screen::General => self.ui_general(ui),
