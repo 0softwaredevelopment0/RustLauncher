@@ -889,19 +889,24 @@ impl App {
             if ui.button("Rescan versions").clicked() {
                 self.reload_versions();
             }
-            if ui.button("Stop").clicked() {
-                if self.game_running.load(Ordering::SeqCst) && self.settings.confirm_stop {
+            let game_running = self.game_running.load(Ordering::SeqCst);
+            let stop = egui::Button::new("Stop");
+            if ui
+                .add_enabled(game_running, stop)
+                .on_disabled_hover_text("The game is not running")
+                .clicked()
+            {
+                if self.settings.confirm_stop {
                     self.terminate_dont_ask = false;
                     self.terminate_confirm = Some(TerminateKind::Stop);
                 } else {
                     self.stop_game();
                 }
             }
-            let kill_enabled = self.game_running.load(Ordering::SeqCst);
             let kill =
                 egui::Button::new(egui::RichText::new("☠ Kill").color(egui::Color32::LIGHT_RED));
             if ui
-                .add_enabled(kill_enabled, kill)
+                .add_enabled(game_running, kill)
                 .on_disabled_hover_text("The game is not running")
                 .clicked()
             {
