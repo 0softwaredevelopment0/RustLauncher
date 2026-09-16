@@ -148,11 +148,72 @@ pub struct VersionRow {
     pub is_latest_release: bool,
     /// Present when the version can be (re-)installed from the manifest.
     pub remote: Option<updater::ManifestVersion>,
+    /// Set when the row is a mod-loader version (fabric-/quilt-/neoforge-/forge-).
+    pub loader: Option<updater::Loader>,
+}
+
+/// Detect a mod-loader version by its id: the launcher names loader installs
+/// `fabric-loader-<b>-<mc>`, `quilt-loader-…`, `neoforge-<mc>-<b>`,
+/// `forge-<mc>-<b>`; other launchers use the same prefixes.
+pub fn loader_of(version_name: &str) -> Option<updater::Loader> {
+    let name = version_name.to_ascii_lowercase();
+    if name.starts_with("fabric") || name.contains("fabric-loader") {
+        Some(updater::Loader::Fabric)
+    } else if name.starts_with("quilt") || name.contains("quilt-loader") {
+        Some(updater::Loader::Quilt)
+    } else if name.starts_with("neoforge") {
+        Some(updater::Loader::NeoForge)
+    } else if name.starts_with("forge") {
+        Some(updater::Loader::Forge)
+    } else {
+        None
+    }
+}
+
+/// Extract the base Minecraft version from a (possibly loader-prefixed)
+/// version id: `fabric-loader-0.19.5-1.21.4` -> `1.21.4`,
+/// `neoforge-1.21.4-21.4.157` -> `1.21.4`, `1.20.1` -> `1.20.1`.
+pub fn base_mc_of(version_name: &str) -> String {
+    let lower = version_name.to_ascii_lowercase();
+    // Find the `1.x` segment that starts a Minecraft version: it must be
+    // preceded by a dash (or the string start), otherwise `0.21.0` would
+    // match the `1.0` inside it.
+    fn find_mc_segment(s: &str) -> Option<usize> {
+        let bytes = s.as_bytes();
+        (0..s.len()).find(|&i| {
+            bytes[i] == b'1'
+                && i + 1 < bytes.len()
+                && bytes[i + 1] == b'.'
+                && (i == 0 || bytes[i - 1] == b'-')
+        })
+    }
+    for prefix in ["fabric-loader-", "quilt-loader-"] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            if let Some(pos) = find_mc_segment(rest) {
+                return rest[pos..].to_string();
+            }
+        }
+    }
+    for prefix in ["neoforge-", "forge-"] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            if let Some(pos) = find_mc_segment(rest) {
+                // Cut at the loader build: `1.21.4-21.4.157` -> `1.21.4`.
+                let tail = &rest[pos..];
+                if let Some(dash) = tail.find('-') {
+                    return tail[..dash].to_string();
+                }
+                return tail.to_string();
+            }
+        }
+    }
+    version_name.to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VersionFilter {
     All,
+    Mojang,
+    Loaders,
     Release,
     Snapshot,
     Old,
@@ -163,6 +224,8 @@ impl VersionFilter {
     fn label(self) -> &'static str {
         match self {
             VersionFilter::All => "All",
+            VersionFilter::Mojang => "Mojang",
+            VersionFilter::Loaders => "Loaders",
             VersionFilter::Release => "Releases",
             VersionFilter::Snapshot => "Snapshots",
             VersionFilter::Old => "Old",
@@ -173,9 +236,13 @@ impl VersionFilter {
     fn matches(self, row: &VersionRow) -> bool {
         match self {
             VersionFilter::All => true,
-            VersionFilter::Release => row.kind == "release",
-            VersionFilter::Snapshot => row.kind == "snapshot",
-            VersionFilter::Old => matches!(row.kind.as_str(), "old_alpha" | "old_beta"),
+            VersionFilter::Mojang => row.loader.is_none(),
+            VersionFilter::Loaders => row.loader.is_some(),
+            VersionFilter::Release => row.loader.is_none() && row.kind == "release",
+            VersionFilter::Snapshot => row.loader.is_none() && row.kind == "snapshot",
+            VersionFilter::Old => {
+                row.loader.is_none() && matches!(row.kind.as_str(), "old_alpha" | "old_beta")
+            }
             VersionFilter::Installed => row.installed,
         }
     }
@@ -194,18 +261,30 @@ pub fn merge_versions(local: &[Version], manifest: Option<&Manifest>) -> Vec<Ver
 
     for v in local {
         index_by_name.insert(v.name.clone(), rows.len());
+        let loader = loader_of(&v.name);
+        // Loader installs live in their own group; keep manifest kinds only
+        // for Mojang rows.
+        let kind = if loader.is_some() {
+            "loader".to_string()
+        } else {
+            "local".to_string()
+        };
         rows.push(VersionRow {
             name: v.name.clone(),
-            kind: "local".to_string(),
+            kind,
             installed: true,
-            is_latest_release: v.name == latest,
+            is_latest_release: loader.is_none() && v.name == latest,
             remote: None,
+            loader,
         });
     }
     if let Some(manifest) = manifest {
         for mv in &manifest.versions {
             if let Some(&i) = index_by_name.get(&mv.id) {
-                rows[i].kind = mv.kind.clone();
+                // Keep the loader grouping for loader rows.
+                if rows[i].loader.is_none() {
+                    rows[i].kind = mv.kind.clone();
+                }
                 rows[i].remote = Some(mv.clone());
             } else {
                 index_by_name.insert(mv.id.clone(), rows.len());
@@ -215,6 +294,7 @@ pub fn merge_versions(local: &[Version], manifest: Option<&Manifest>) -> Vec<Ver
                     installed: false,
                     is_latest_release: mv.id == latest,
                     remote: Some(mv.clone()),
+                    loader: None,
                 });
             }
         }
@@ -1427,6 +1507,8 @@ impl App {
         ui.horizontal(|ui| {
             for filter in [
                 VersionFilter::All,
+                VersionFilter::Mojang,
+                VersionFilter::Loaders,
                 VersionFilter::Release,
                 VersionFilter::Snapshot,
                 VersionFilter::Old,
@@ -1478,12 +1560,21 @@ impl App {
             .filter(|row| search.is_empty() || row.name.to_lowercase().contains(&search))
             .collect();
 
-        self.ui_loader_row(ui, installing);
+        let shown_mojang = shown.iter().filter(|r| r.loader.is_none()).count();
+        let shown_loaders = shown.iter().filter(|r| r.loader.is_some()).count();
 
-        ui.separator();
+        // The loader picker targets a Mojang version; show it when any
+        // Mojang versions are visible.
+        if shown_mojang > 0 {
+            self.ui_loader_row(ui, installing);
+            ui.separator();
+        }
+
         ui.label(format!(
-            "{} shown · {} installed · selected: {}",
+            "{} shown ({} Mojang, {} loaders) · {} installed · selected: {}",
             shown.len(),
+            shown_mojang,
+            shown_loaders,
             self.versions.len(),
             if self.settings.selected_version.is_empty() {
                 "— none —"
@@ -1492,38 +1583,65 @@ impl App {
             }
         ));
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for row in shown {
-                ui.horizontal(|ui| {
-                    if row.installed {
-                        ui.label("✔");
-                    } else {
-                        ui.label(" ");
-                    }
-                    ui.monospace(&row.name);
-                    ui.weak(format!("[{}]", row.kind));
-                    if row.is_latest_release {
-                        ui.weak("(latest release)");
-                    }
-                    let is_selected = self.settings.selected_version == row.name;
-                    if is_selected {
-                        ui.colored_label(egui::Color32::LIGHT_GREEN, "selected");
-                    }
-                    if row.installed {
-                        if is_selected {
-                            ui.weak("current");
-                        } else if ui.button("Select").clicked() {
-                            self.settings.selected_version = row.name.clone();
-                            self.save_settings();
-                        }
-                    } else if ui
-                        .add_enabled(!installing, egui::Button::new("Install"))
-                        .clicked()
-                    {
-                        if let Some(remote) = row.remote.clone() {
-                            self.install_version(remote);
-                        }
-                    }
-                });
+            // Group 1: Mojang versions (vanilla manifest + local non-loader).
+            let mut mojang_header_shown = false;
+            let mut loaders_header_shown = false;
+            for row in shown.iter() {
+                if row.loader.is_none() && !mojang_header_shown {
+                    ui.strong("Mojang");
+                    mojang_header_shown = true;
+                }
+                if row.loader.is_some() && !loaders_header_shown {
+                    ui.add_space(4.0);
+                    ui.strong("Mod loaders");
+                    loaders_header_shown = true;
+                }
+                self.version_row_ui(ui, row, installing);
+            }
+            if shown.is_empty() {
+                ui.weak("No versions match the current filter.");
+            }
+        });
+    }
+
+    /// Render one row of the version list (Select / Install controls).
+    fn version_row_ui(&mut self, ui: &mut egui::Ui, row: &VersionRow, installing: bool) {
+        ui.horizontal(|ui| {
+            if row.installed {
+                ui.label("✔");
+            } else {
+                ui.label(" ");
+            }
+            ui.monospace(&row.name);
+            if let Some(loader) = row.loader {
+                ui.colored_label(
+                    egui::Color32::from_rgb(0xBA, 0x8E, 0xFF),
+                    format!("[{}]", loader.label()),
+                );
+            } else {
+                ui.weak(format!("[{}]", row.kind));
+            }
+            if row.is_latest_release {
+                ui.weak("(latest release)");
+            }
+            let is_selected = self.settings.selected_version == row.name;
+            if is_selected {
+                ui.colored_label(egui::Color32::LIGHT_GREEN, "selected");
+            }
+            if row.installed {
+                if is_selected {
+                    ui.weak("current");
+                } else if ui.button("Select").clicked() {
+                    self.settings.selected_version = row.name.clone();
+                    self.save_settings();
+                }
+            } else if ui
+                .add_enabled(!installing, egui::Button::new("Install"))
+                .clicked()
+            {
+                if let Some(remote) = row.remote.clone() {
+                    self.install_version(remote);
+                }
             }
         });
     }
@@ -1612,23 +1730,21 @@ impl App {
             }
         });
 
-        // The Minecraft version loaders install onto: prefer the search box
-        // (exact id), else the selected version, else the latest release
-        // known from the manifest.
+        // The Minecraft version loaders install onto: the selected version
+        // (stripped of a loader prefix, so having a loader version picked
+        // targets its base MC), else the latest release from the manifest.
         let manifest_release = match &self.manifest {
             Some(Ok(m)) => m.latest.get("release").cloned().unwrap_or_default(),
             _ => String::new(),
         };
-        let search = self.version_search.trim().to_string();
-        let mc = if !search.is_empty() {
-            search
-        } else if !self.settings.selected_version.is_empty() {
-            self.settings.selected_version.clone()
+        let selected = self.settings.selected_version.trim().to_string();
+        let mc = if !selected.is_empty() {
+            base_mc_of(&selected)
         } else {
             manifest_release
         };
         if mc.is_empty() {
-            ui.weak("Load a manifest (or search a version id) to pick a loader build.");
+            ui.weak("Select or install a Mojang version to pick a loader build.");
             return;
         }
 
@@ -2319,7 +2435,8 @@ mod tests {
 
         // Local versions come first, remote-only afterwards.
         assert_eq!(rows[0].name, "fabric-1.20.1");
-        assert_eq!(rows[0].kind, "local");
+        assert_eq!(rows[0].kind, "loader");
+        assert_eq!(rows[0].loader, Some(updater::Loader::Fabric));
         assert!(rows[0].installed);
         assert!(rows[0].remote.is_none());
 
@@ -2343,7 +2460,7 @@ mod tests {
         let rows = merge_versions(&local, None);
         assert_eq!(rows.len(), 1);
         assert!(rows[0].installed);
-        assert_eq!(rows[0].kind, "local");
+        assert_eq!(rows[0].kind, "loader");
     }
 
     #[test]
@@ -2364,6 +2481,7 @@ mod tests {
                 installed: true,
                 is_latest_release: false,
                 remote: None,
+                loader: Some(updater::Loader::Fabric),
             },
             VersionRow {
                 name: "1.21.4".into(),
@@ -2371,6 +2489,7 @@ mod tests {
                 installed: true,
                 is_latest_release: false,
                 remote: None,
+                loader: None,
             },
             VersionRow {
                 name: "25w14craftmine".into(),
@@ -2378,6 +2497,7 @@ mod tests {
                 installed: false,
                 is_latest_release: false,
                 remote: None,
+                loader: None,
             },
             VersionRow {
                 name: "a1.2.5".into(),
@@ -2385,6 +2505,7 @@ mod tests {
                 installed: false,
                 is_latest_release: false,
                 remote: None,
+                loader: None,
             },
         ];
         let rows = &rows[..];
@@ -2393,6 +2514,21 @@ mod tests {
                 .filter(|r| VersionFilter::All.matches(r))
                 .count(),
             4
+        );
+        // The Mojang/Loaders split follows the detected loader.
+        assert_eq!(
+            rows.iter()
+                .filter(|r| VersionFilter::Mojang.matches(r))
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1.21.4", "25w14craftmine", "a1.2.5"]
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|r| VersionFilter::Loaders.matches(r))
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fabric-1.20.1"]
         );
         assert_eq!(
             rows.iter()
@@ -2420,6 +2556,62 @@ mod tests {
                 .map(|r| r.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["fabric-1.20.1", "1.21.4"]
+        );
+    }
+
+    #[test]
+    fn loader_detection_covers_all_prefixes() {
+        assert_eq!(
+            loader_of("fabric-loader-0.19.5-1.21.4"),
+            Some(updater::Loader::Fabric)
+        );
+        assert_eq!(
+            loader_of("quilt-loader-0.21.0-1.20.1"),
+            Some(updater::Loader::Quilt)
+        );
+        assert_eq!(
+            loader_of("neoforge-1.21.4-21.4.157"),
+            Some(updater::Loader::NeoForge)
+        );
+        assert_eq!(
+            loader_of("forge-1.20.1-47.4.10"),
+            Some(updater::Loader::Forge)
+        );
+        // Case-insensitive + loose fabric/forge names from other launchers.
+        assert_eq!(loader_of("Fabric-1.20.1"), Some(updater::Loader::Fabric));
+        assert_eq!(loader_of("1.21.4"), None);
+        assert_eq!(loader_of("25w14craftmine"), None);
+    }
+
+    #[test]
+    fn base_mc_extraction_strips_loader_prefixes() {
+        assert_eq!(base_mc_of("fabric-loader-0.19.5-1.21.4"), "1.21.4");
+        assert_eq!(base_mc_of("quilt-loader-0.21.0-1.20.1"), "1.20.1");
+        assert_eq!(base_mc_of("neoforge-1.21.4-21.4.157"), "1.21.4");
+        assert_eq!(base_mc_of("forge-1.20.1-47.4.10"), "1.20.1");
+        assert_eq!(base_mc_of("1.20.1"), "1.20.1");
+        assert_eq!(base_mc_of("25w14craftmine"), "25w14craftmine");
+    }
+
+    #[test]
+    fn merge_groups_loaders_after_mojang_rows() {
+        let local = vec![
+            local_version("forge-1.20.1-47.4.10"),
+            local_version("1.20.1"),
+            local_version("fabric-loader-0.19.5-1.21.4"),
+            local_version("1.21.4"),
+        ];
+        let rows = merge_versions(&local, None);
+        // Local order is preserved; every loader row carries its loader tag.
+        assert_eq!(rows[0].loader, Some(updater::Loader::Forge));
+        assert_eq!(rows[1].loader, None);
+        assert_eq!(rows[2].loader, Some(updater::Loader::Fabric));
+        assert_eq!(rows[3].loader, None);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| VersionFilter::Loaders.matches(r))
+                .count(),
+            2
         );
     }
 }
