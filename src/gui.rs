@@ -42,6 +42,8 @@ pub struct App {
     pub username_input: String,
     pub play_status: String,
     pub launch_error: Option<String>,
+    /// The force-kill confirmation dialog is open.
+    kill_confirm_open: bool,
 
     // Game process.
     pub console: Arc<Mutex<Vec<String>>>,
@@ -213,6 +215,7 @@ impl App {
             screen: Screen::General,
             play_status: String::new(),
             launch_error: None,
+            kill_confirm_open: false,
             console: Arc::new(Mutex::new(Vec::new())),
             console_seq: 0,
             game_running: Arc::new(AtomicBool::new(false)),
@@ -472,6 +475,69 @@ impl App {
         self.play_status = "Stop requested".into();
     }
 
+    /// The force-kill confirmation dialog: material warning triangle,
+    /// a "don't ask again" checkbox, and Confirm / Cancel buttons.
+    fn show_kill_confirmation(&mut self, ctx: &egui::Context) {
+        let screen = ctx.screen_rect();
+
+        // Dim everything behind the dialog (above panels/windows); clicking
+        // the dimmed area cancels.
+        egui::Area::new(egui::Id::new("kill_confirm_dim"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(screen.left_top())
+            .show(ctx, |ui| {
+                let resp = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
+                if resp.clicked() {
+                    self.kill_confirm_open = false;
+                }
+            });
+
+        // The dialog itself sits above the dim layer.
+        let mut dont_ask_again = false;
+        egui::Area::new(egui::Id::new("kill_confirm_dialog"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        draw_warning_triangle(ui, 36.0);
+                        ui.add_space(6.0);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Force kill the game?")
+                                    .strong()
+                                    .size(16.0),
+                            );
+                            ui.label("The game process tree will be terminated immediately. Unsaved progress will be lost.");
+                        });
+                    });
+
+                    ui.add_space(10.0);
+                    ui.checkbox(&mut dont_ask_again, "Don't ask again");
+
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                            .clicked()
+                        {
+                            self.kill_confirm_open = false;
+                            if dont_ask_again {
+                                self.settings.confirm_kill = false;
+                                self.save_settings();
+                            }
+                            self.kill_game();
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.kill_confirm_open = false;
+                        }
+                    });
+                });
+            });
+    }
+
     /// Force-kill the game process tree (taskkill /T /F) — the last resort.
     fn kill_game(&mut self) {
         let pid = *self.game_pid.lock().unwrap_or_else(|e| e.into_inner());
@@ -641,6 +707,41 @@ fn push_line(console: &Arc<Mutex<Vec<String>>>, line: String) {
     }
 }
 
+/// Draw a material-style warning triangle (yellow fill, black exclamation
+/// mark) of the given height, vertically centered on the current layout.
+fn draw_warning_triangle(ui: &mut egui::Ui, height: f32) {
+    const YELLOW: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xC1, 0x07); // amber 500
+    const BLACK: egui::Color32 = egui::Color32::BLACK;
+
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(height * 1.1, height), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+
+    // Triangle: apex at the top-center, base at the bottom.
+    let top = egui::pos2(rect.center().x, rect.top());
+    let left = egui::pos2(rect.left(), rect.bottom());
+    let right = egui::pos2(rect.right(), rect.bottom());
+    p.add(egui::Shape::convex_polygon(
+        vec![top, left, right],
+        YELLOW,
+        egui::Stroke::NONE,
+    ));
+
+    // Rounded exclamation mark: a stem bar plus a dot.
+    let cx = rect.center().x;
+    let bar_top = rect.top() + height * 0.34;
+    let bar_bottom = rect.top() + height * 0.62;
+    let stroke = egui::Stroke::new(height * 0.09, BLACK);
+    p.line_segment(
+        [egui::pos2(cx, bar_top), egui::pos2(cx, bar_bottom)],
+        stroke,
+    );
+    p.circle_filled(
+        egui::pos2(cx, rect.top() + height * 0.78),
+        height * 0.06,
+        BLACK,
+    );
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.apply_pending_jobs();
@@ -772,9 +873,18 @@ impl App {
                 .on_disabled_hover_text("The game is not running")
                 .clicked()
             {
-                self.kill_game();
+                if self.settings.confirm_kill {
+                    self.kill_confirm_open = true;
+                } else {
+                    self.kill_game();
+                }
             }
         });
+
+        if self.kill_confirm_open {
+            let ctx = ui.ctx().clone();
+            self.show_kill_confirmation(&ctx);
+        }
 
         if !self.play_status.is_empty() {
             ui.add_space(6.0);

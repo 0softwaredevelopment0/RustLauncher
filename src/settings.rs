@@ -39,6 +39,8 @@ pub struct Settings {
     /// Console shows every log line instead of errors only.
     pub all_logs: bool,
     pub dark_theme: bool,
+    /// Ask for confirmation before force-killing the game (Kill button).
+    pub confirm_kill: bool,
 }
 
 impl Default for Settings {
@@ -58,6 +60,7 @@ impl Default for Settings {
             save_console_log: true,
             all_logs: false,
             dark_theme: true,
+            confirm_kill: true,
         }
     }
 }
