@@ -85,6 +85,8 @@ pub struct App {
 
     // Background completions.
     jobs: Arc<Mutex<Vec<Job>>>,
+    /// Handle used by background threads to wake the UI when a job finishes.
+    ctx: egui::Context,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,7 +191,7 @@ pub fn merge_versions(local: &[Version], manifest: Option<&Manifest>) -> Vec<Ver
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let _ = cc;
+        let ctx = cc.egui_ctx.clone();
         let home_dir = home::launcher_home().unwrap_or_else(|_| std::env::temp_dir());
         let _ = home::ensure(&home_dir);
         let settings = Settings::load(&home_dir);
@@ -234,6 +236,7 @@ impl App {
             profile_index,
             profile_error: None,
             jobs: Arc::new(Mutex::new(Vec::new())),
+            ctx,
         };
         app.refresh_skins();
         app.select_saved_skin();
@@ -258,17 +261,16 @@ impl App {
         F: FnOnce(&mut App, T) + Send + 'static,
     {
         let jobs = self.jobs.clone();
-        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        let ctx = self.ctx.clone();
+        // Fire-and-forget: the worker never blocks the UI thread. It queues
+        // the result and asks egui to repaint so `apply_pending_jobs` picks
+        // it up on the next frame.
         std::thread::spawn(move || {
             let value = task();
             let job: Job = Box::new(move |app: &mut App| apply(app, value));
-            let _ = tx.send(job);
-        });
-        let job = rx.recv().ok();
-        if let Some(job) = job {
-            // The apply closure runs on the next repaint; queue it.
             jobs.lock().unwrap_or_else(|e| e.into_inner()).push(job);
-        }
+            ctx.request_repaint();
+        });
     }
 
     fn save_settings(&self) {

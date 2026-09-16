@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn parses_vanilla_style_json() {
-        let tmp = std::env::temp_dir().join(format!("rl-json-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("rl-json-vanilla-{}", std::process::id()));
         fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("1.20.1.json");
         fs::write(
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn parses_fabric_style_json_with_asset_index_object() {
-        let tmp = std::env::temp_dir().join(format!("rl-json-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("rl-json-fabric-{}", std::process::id()));
         fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("fabric.json");
         fs::write(
