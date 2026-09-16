@@ -512,17 +512,19 @@ impl App {
         }
         self.log_console(line.clone());
 
-        // Last 3 lines of the launcher log file for the toast detail.
-        let detail = self
-            .launcher_log
-            .as_ref()
-            .map(|log| log.path.clone())
-            .and_then(|path| tail_lines(&path, 3));
+        // The collapsed toast shows the last 3 lines; a click expands the
+        // full (capped) log, animated.
+        let log_path = self.launcher_log.as_ref().map(|l| l.path.clone());
+        let detail = log_path.as_deref().and_then(|p| tail_lines(p, 3));
+        let full_log = log_path
+            .as_deref()
+            .and_then(|p| tail_lines(p, crate::notifications::TOAST_MAX_LOG_LINES));
 
         self.toasts.push(Toast::error(
             "An error occurred",
             Some(code.to_string()),
             detail,
+            full_log,
         ));
     }
 
@@ -553,7 +555,7 @@ impl App {
         enum Action {
             Pin(usize),
             Close(usize),
-            OpenLogs,
+            Toggle(usize),
         }
         let mut actions: Vec<Action> = Vec::new();
 
@@ -574,7 +576,7 @@ impl App {
             } else if body_clicked {
                 actions.push(Action::Pin(i));
                 if kind == ToastKind::Error {
-                    actions.push(Action::OpenLogs);
+                    actions.push(Action::Toggle(i));
                 }
             }
             // Stack the next (older) toast below this one; fall back to an
@@ -591,7 +593,11 @@ impl App {
                         t.pin();
                     }
                 }
-                Action::OpenLogs => self.screen = Screen::Console,
+                Action::Toggle(i) => {
+                    if let Some(t) = self.toasts.items_mut().get_mut(i) {
+                        t.toggle_expanded();
+                    }
+                }
             }
         }
     }
@@ -607,6 +613,9 @@ impl App {
         let toast = &self.toasts.items()[index];
         let alpha = toast.visual_alpha();
         let kind = toast.kind;
+        let expanded = toast.expanded();
+        let expand_progress = toast.expand_progress();
+        let full_log = toast.full_log().map(str::to_string);
         let id = egui::Id::new(("toast", index));
 
         let (close_clicked, body_clicked, size) = egui::Area::new(id)
@@ -614,7 +623,15 @@ impl App {
             .anchor(egui::Align2::LEFT_BOTTOM, anchor_offset)
             .show(ctx, |ui| {
                 ui.multiply_opacity(alpha);
-                toast_body(ui, toast, kind, index)
+                toast_body(
+                    ui,
+                    toast,
+                    kind,
+                    index,
+                    expanded,
+                    expand_progress,
+                    full_log.as_deref(),
+                )
             })
             .inner;
 
@@ -898,6 +915,9 @@ fn toast_body(
     toast: &Toast,
     kind: ToastKind,
     index: usize,
+    expanded: bool,
+    expand_progress: f32,
+    full_log: Option<&str>,
 ) -> (bool, bool, egui::Vec2) {
     let mut close_clicked = false;
     let mut body_clicked = false;
@@ -916,6 +936,10 @@ fn toast_body(
         .show(ui, |ui| {
             ui.set_min_width(320.0);
             ui.set_max_width(360.0);
+
+            // The ✕ close zone first, as part of the header row. It is an
+            // interactable widget with its own ID; egui gives it priority
+            // over the later whole-card interact for clicks inside it.
             ui.horizontal(|ui| {
                 match kind {
                     ToastKind::Error => draw_warning_triangle(ui, 24.0),
@@ -935,27 +959,63 @@ fn toast_body(
                     }
                 });
 
-                // A frameless ✕ button (transparent hit area, painted
-                // material cross), top-right: always available, even when
-                // the toast is pinned.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let close_id = egui::Id::new(("toast_close", index));
-                    let (close_rect, close_resp) =
-                        ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
-                    ui.painter_at(close_rect)
-                        .add(draw_material_cross(close_rect, close_resp.hovered()));
-                    if close_resp.clicked() {
-                        close_clicked = true;
-                    }
-                    ui.data_mut(|d| d.insert_temp(close_id, close_resp.clicked()));
-                });
+                let (close_rect, close_resp) =
+                    ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+                ui.painter_at(close_rect)
+                    .add(draw_material_cross(close_rect, close_resp.hovered()));
+                if close_resp.clicked() {
+                    close_clicked = true;
+                }
             });
+
+            // The expanding log section (error toasts with a log). The
+            // height animates 0 → TOAST_MAX_LOG_HEIGHT; the galley is
+            // bottom-anchored inside the clip rect so the section visually
+            // opens upward from the header.
+            if let Some(log) = full_log {
+                if expand_progress > 0.001 {
+                    let target_h = crate::notifications::TOAST_MAX_LOG_HEIGHT * expand_progress;
+                    ui.add_space(6.0 * expand_progress);
+                    let (log_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), target_h),
+                        egui::Sense::hover(),
+                    );
+                    let painter = ui.painter_at(log_rect);
+                    painter.rect_filled(log_rect, 2.0, egui::Color32::from_black_alpha(90));
+                    let galley = ui.painter().layout_no_wrap(
+                        log.to_string(),
+                        egui::FontId::monospace(10.0),
+                        egui::Color32::from_rgb(0xC8, 0xC8, 0xC8),
+                    );
+                    // Keep the last log line pinned to the bottom of the
+                    // section while it grows.
+                    let dy = (galley.size().y - log_rect.height()).max(0.0);
+                    painter.galley(
+                        egui::pos2(log_rect.left() + 4.0, log_rect.top() - dy),
+                        galley,
+                        egui::Color32::TRANSPARENT,
+                    );
+                }
+
+                ui.label(
+                    egui::RichText::new(if expanded {
+                        "▲ click to collapse"
+                    } else {
+                        "▼ click to expand log"
+                    })
+                    .small()
+                    .weak(),
+                );
+            }
         })
         .response
         .rect
         .size();
 
-    // Left-click anywhere on the card body (not on ✕): pin + open logs.
+    // Left-click anywhere on the card body (the ✕ has its own interact ID
+    // registered earlier in this pass, and egui routes the click to the
+    // widget under the pointer — the guard also keeps a ✕ click from
+    // double-firing).
     let interact = ui.interact(
         ui.min_rect(),
         egui::Id::new(("toast_body", index)),

@@ -17,6 +17,15 @@ pub const TOAST_SLIDE_SECS: f32 = 1.2;
 /// Seconds a fresh toast takes to fade in.
 pub const TOAST_APPEAR_SECS: f32 = 0.25;
 
+/// Expand/collapse animation speed for the log section (progress per second).
+const TOAST_EXPAND_SPEED: f32 = 5.0;
+
+/// The expanded log section's maximum height in pixels.
+pub const TOAST_MAX_LOG_HEIGHT: f32 = 180.0;
+
+/// Cap for the full log attached to an error toast (last N lines).
+pub const TOAST_MAX_LOG_LINES: usize = 300;
+
 /// What kind of notification a toast carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
@@ -42,10 +51,21 @@ pub struct Toast {
     pinned: bool,
     /// Height measured during the last render; used to stack toasts.
     height: f32,
+    /// The full (capped) log for error toasts, revealed by expansion.
+    full_log: Option<String>,
+    /// Whether the log section is currently expanded.
+    expanded: bool,
+    /// 0..1 animation progress of the expansion.
+    expand_progress: f32,
 }
 
 impl Toast {
-    pub fn error(title: impl Into<String>, code: Option<String>, detail: Option<String>) -> Self {
+    pub fn error(
+        title: impl Into<String>,
+        code: Option<String>,
+        detail: Option<String>,
+        full_log: Option<String>,
+    ) -> Self {
         Toast {
             kind: ToastKind::Error,
             title: title.into(),
@@ -54,6 +74,9 @@ impl Toast {
             age: 0.0,
             pinned: false,
             height: 0.0,
+            full_log,
+            expanded: false,
+            expand_progress: 0.0,
         }
     }
 
@@ -66,6 +89,9 @@ impl Toast {
             age: 0.0,
             pinned: false,
             height: 0.0,
+            full_log: None,
+            expanded: false,
+            expand_progress: 0.0,
         }
     }
 
@@ -84,11 +110,48 @@ impl Toast {
         self.pinned = true;
     }
 
-    /// Advance the age; returns `true` when an unpinned toast has fully
-    /// slid away and should be removed.
+    /// Left-click on an error toast: expand the full log smoothly upward.
+    /// Clicking again collapses it back and resumes the normal 5s hold.
+    pub fn toggle_expanded(&mut self) {
+        if self.full_log.is_none() {
+            return;
+        }
+        if self.expanded {
+            // Collapse: hide the log, release the pin and restart the hold.
+            self.expanded = false;
+            self.pinned = false;
+            self.age = 0.0;
+        } else {
+            self.expanded = true;
+            self.pinned = true;
+        }
+    }
+
+    pub fn expanded(&self) -> bool {
+        self.expanded
+    }
+
+    pub fn expand_progress(&self) -> f32 {
+        self.expand_progress
+    }
+
+    pub fn full_log(&self) -> Option<&str> {
+        self.full_log.as_deref()
+    }
+
+    /// Advance the age and the expansion animation; returns `true` when an
+    /// unpinned toast has fully slid away and should be removed.
     pub fn tick(&mut self, dt: f32) -> bool {
         if !self.pinned {
             self.age += dt;
+        }
+        // The expansion animates regardless of the pin state.
+        let target = if self.expanded { 1.0 } else { 0.0 };
+        let speed = TOAST_EXPAND_SPEED * dt;
+        if self.expand_progress < target {
+            self.expand_progress = (self.expand_progress + speed).min(target);
+        } else if self.expand_progress > target {
+            self.expand_progress = (self.expand_progress - speed).max(target);
         }
         !self.pinned && self.age >= TOAST_HOLD_SECS + TOAST_SLIDE_SECS
     }
@@ -186,7 +249,7 @@ mod tests {
 
     #[test]
     fn pinned_toast_never_ages() {
-        let mut t = Toast::error("boom", Some("E-42".into()), None);
+        let mut t = Toast::error("boom", Some("E-42".into()), None, Some("log".into()));
         t.pin();
         assert!(t.is_pinned());
         for _ in 0..100 {
@@ -194,6 +257,35 @@ mod tests {
         }
         assert_eq!(t.age(), 0.0);
         assert_eq!(t.slide_offset(), 0.0);
+    }
+
+    #[test]
+    fn expand_toggles_and_animates() {
+        let mut t = Toast::error("boom", None, None, Some("line1\nline2".into()));
+        assert!(!t.expanded());
+        t.toggle_expanded();
+        assert!(t.expanded() && t.is_pinned());
+        t.tick(0.1);
+        assert!(t.expand_progress() > 0.0 && t.expand_progress() < 1.0);
+        for _ in 0..60 {
+            t.tick(0.05);
+        }
+        assert_eq!(t.expand_progress(), 1.0);
+        assert!(!t.tick(10.0)); // pinned while expanded → never slides
+        t.toggle_expanded(); // collapse
+        assert!(!t.expanded() && !t.is_pinned());
+        for _ in 0..60 {
+            t.tick(0.05);
+        }
+        assert_eq!(t.expand_progress(), 0.0);
+        assert!(t.tick(TOAST_HOLD_SECS + TOAST_SLIDE_SECS)); // resumes aging
+    }
+
+    #[test]
+    fn toggle_is_a_no_op_without_a_log() {
+        let mut t = Toast::error("boom", None, None, None);
+        t.toggle_expanded();
+        assert!(!t.expanded());
     }
 
     #[test]
