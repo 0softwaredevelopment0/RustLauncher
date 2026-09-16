@@ -50,6 +50,117 @@ fn platform_slug(platform: ContentPlatform) -> &'static str {
     }
 }
 
+/// Licenses commonly offered as a filter on Modrinth.
+const COMMON_LICENSES: &[&str] = &[
+    "MIT",
+    "Apache-2.0",
+    "GPL-3.0",
+    "LGPL-3.0",
+    "BSD-3-Clause",
+    "MPL-2.0",
+    "CC0-1.0",
+    "ARR",
+];
+
+/// Category chips offered per content kind (Modrinth tags). Loaders are
+/// handled by the dedicated loader filter and not repeated here.
+fn categories_for(kind: content::ContentKind) -> &'static [&'static str] {
+    match kind {
+        content::ContentKind::Mod => &[
+            "adventure",
+            "optimization",
+            "gameplay",
+            "storage",
+            "food",
+            "furniture",
+            "library",
+            "magic",
+            "mobs",
+            "technology",
+            "transportation",
+            "utility",
+            "worldgen",
+        ],
+        content::ContentKind::ResourcePack => &[
+            "8x-",
+            "16x",
+            "32x",
+            "64x",
+            "128x",
+            "256x",
+            "512x+",
+            "simplistic",
+            "realistic",
+            "themed",
+            "vanilla-like",
+            "fonts",
+            "gui",
+            "medieval",
+        ],
+        content::ContentKind::DataPack => {
+            &["adventure", "gameplay", "technology", "utility", "worldgen"]
+        }
+        content::ContentKind::Shader => &[
+            "cartoon",
+            "cursed",
+            "fantasy",
+            "realistic",
+            "semi-realistic",
+            "vanilla-like",
+            "potato",
+            "low",
+            "medium",
+            "high",
+            "screenshot",
+        ],
+        content::ContentKind::Plugin => &[
+            "chat",
+            "dev-tools",
+            "economy",
+            "gameplay",
+            "management",
+            "mechanics",
+            "protection",
+            "utility",
+        ],
+        content::ContentKind::Modpack => &[
+            "adventure",
+            "challenging",
+            "combat",
+            "expert",
+            "fps",
+            "hrm",
+            "light",
+            "multiplayer",
+            "optimization",
+            "quests",
+            "skyblock",
+            "small",
+            "technology",
+        ],
+        _ => &[],
+    }
+}
+
+/// Strip the most common markdown noise so project bodies read cleanly in
+/// the plain-text description view.
+fn strip_markdown(line: &str) -> String {
+    let mut out = line.replace("**", "").replace("*", "").replace("`", "");
+    // Collapse markdown links [text](url) to text.
+    while let Some(start) = out.find('[') {
+        let Some(end_rel) = out[start..].find("](") else {
+            break;
+        };
+        let end = start + end_rel;
+        let Some(close) = out[end..].find(')') else {
+            break;
+        };
+        let text = out[start + 1..end].to_string();
+        out = format!("{}{}{}", &out[..start], text, &out[end + close + 1..]);
+    }
+    out
+}
+
 /// Whether the content kind is loader-specific (mods are; packs are not).
 fn kind_uses_loader(kind: content::ContentKind) -> bool {
     kind == content::ContentKind::Mod
@@ -61,13 +172,24 @@ struct ContentUi {
     kind: content::ContentKind,
     search: String,
     loader_filter: Option<updater::Loader>,
+    /// Category tags chosen for the current kind (OR-combined).
+    category_filter: Vec<String>,
+    /// License short name filter (Modrinth).
+    license_filter: Option<String>,
+    /// Search sort order.
+    sort: content::SortIndex,
     /// Search results, loaded lazily.
     results: Option<Result<Vec<content::ContentItem>, String>>,
     loading: bool,
-    /// The project whose file list is expanded.
+    /// The project whose detail view is open.
     open_project: Option<String>,
     files: BTreeMap<String, Option<Result<Vec<content::ContentFile>, String>>>,
     files_loading: bool,
+    /// The loaded project page (description body, links).
+    detail: BTreeMap<String, Option<Result<content::ProjectDetail, String>>>,
+    /// Selected inner tab of the open project (0=Description, 1=Changelog,
+    /// 2=Versions).
+    detail_tab: usize,
 }
 
 impl ContentUi {
@@ -88,35 +210,68 @@ impl ContentUi {
     fn snapshot(&self) -> ContentSnapshot {
         ContentSnapshot {
             kind: self.kind,
+            sort: self.sort,
+            category_filter: self.category_filter.clone(),
+            license_filter: self.license_filter.clone(),
             results: self.results.as_ref().map(|r| match r {
                 Ok(items) => Ok(items.clone()),
                 Err(e) => Err(e.clone()),
             }),
             open_project: self.open_project.clone(),
-            files: self
-                .files
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        v.as_ref().map(|r| match r {
-                            Ok(files) => Ok(files.clone()),
-                            Err(e) => Err(e.clone()),
-                        }),
-                    )
-                })
-                .collect(),
+            files: clone_files(&self.files),
+            detail: clone_details(&self.detail),
+            detail_tab: self.detail_tab,
             files_loading: self.files_loading,
         }
     }
 }
 
+fn clone_files(
+    files: &BTreeMap<String, Option<Result<Vec<content::ContentFile>, String>>>,
+) -> BTreeMap<String, Option<Result<Vec<content::ContentFile>, String>>> {
+    files
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                v.as_ref().map(|r| match r {
+                    Ok(files) => Ok(files.clone()),
+                    Err(e) => Err(e.clone()),
+                }),
+            )
+        })
+        .collect()
+}
+
+fn clone_details(
+    details: &BTreeMap<String, Option<Result<content::ProjectDetail, String>>>,
+) -> BTreeMap<String, Option<Result<content::ProjectDetail, String>>> {
+    details
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                v.as_ref().map(|r| match r {
+                    Ok(d) => Ok(d.clone()),
+                    Err(e) => Err(e.clone()),
+                }),
+            )
+        })
+        .collect()
+}
+
 /// The owned snapshot [`ContentUi::snapshot`] hands to the render pass.
 struct ContentSnapshot {
     kind: content::ContentKind,
+    sort: content::SortIndex,
+    category_filter: Vec<String>,
+    #[allow(dead_code)] // read through the live tab, not the snapshot
+    license_filter: Option<String>,
     results: Option<Result<Vec<content::ContentItem>, String>>,
     open_project: Option<String>,
     files: BTreeMap<String, Option<Result<Vec<content::ContentFile>, String>>>,
+    detail: BTreeMap<String, Option<Result<content::ProjectDetail, String>>>,
+    detail_tab: usize,
     files_loading: bool,
 }
 
@@ -159,7 +314,10 @@ pub struct App {
     pub loader_builds_loading: bool,
     /// The loader build chosen in the combo box for the current target.
     pub loader_selected: Option<String>,
+    /// The Mojang release chosen directly in the loader installer section.
+    pub loader_mc_pick: Option<String>,
     /// Whether the Filters section at the bottom of the Versions tab is open.
+    #[allow(dead_code)] // kept for the planned restore of the collapsible section
     pub filters_open: bool,
 
     // Mod-platform tabs (Modrinth / CurseForge), one shared state each.
@@ -167,6 +325,8 @@ pub struct App {
     curseforge: ContentUi,
     content_downloading: bool,
     content_progress: Arc<Mutex<String>>,
+    /// The MC version filter for content searches (empty = any).
+    pub content_mc_filter: String,
 
     // Servers.
     pub server_status: BTreeMap<usize, String>,
@@ -436,11 +596,13 @@ impl App {
             loader_builds: BTreeMap::new(),
             loader_builds_loading: false,
             loader_selected: None,
+            loader_mc_pick: None,
             filters_open: true,
             modrinth: ContentUi::default(),
             curseforge: ContentUi::default(),
             content_downloading: false,
             content_progress: Arc::new(Mutex::new(String::new())),
+            content_mc_filter: String::new(),
             server_status: BTreeMap::new(),
             new_server_name: String::new(),
             new_server_addr: String::new(),
@@ -1631,7 +1793,21 @@ impl App {
             );
         }
 
-        // Top bar: search (with a material magnifier) + rescan/refresh.
+        // Top bar: filter tabs, search (with a material magnifier),
+        // rescan/refresh.
+        ui.horizontal_wrapped(|ui| {
+            for filter in [
+                VersionFilter::All,
+                VersionFilter::Mojang,
+                VersionFilter::Loaders,
+                VersionFilter::Release,
+                VersionFilter::Snapshot,
+                VersionFilter::Old,
+                VersionFilter::Installed,
+            ] {
+                ui.selectable_value(&mut self.version_filter, filter, filter.label());
+            }
+        });
         ui.horizontal(|ui| {
             draw_search_icon(ui, 16.0, ui.visuals().text_color());
             ui.add(
@@ -1680,13 +1856,6 @@ impl App {
         let shown_mojang = shown.iter().filter(|r| r.loader.is_none()).count();
         let shown_loaders = shown.iter().filter(|r| r.loader.is_some()).count();
 
-        // The loader picker targets a Mojang version; show it when any
-        // Mojang versions are visible.
-        if shown_mojang > 0 {
-            self.ui_loader_row(ui, installing);
-            ui.separator();
-        }
-
         ui.label(format!(
             "{} shown ({} Mojang, {} loaders) · {} installed · selected: {}",
             shown.len(),
@@ -1718,31 +1887,13 @@ impl App {
             if shown.is_empty() {
                 ui.weak("No versions match the current filter.");
             }
-
-            // The Filters section lives below the list, as its own
-            // collapsible tab-like section (like Mod loaders above).
-            ui.add_space(6.0);
-            ui.separator();
-            let header = egui::CollapsingHeader::new("Filters")
-                .id_salt("versions_filters")
-                .default_open(self.filters_open)
-                .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for filter in [
-                            VersionFilter::All,
-                            VersionFilter::Mojang,
-                            VersionFilter::Loaders,
-                            VersionFilter::Release,
-                            VersionFilter::Snapshot,
-                            VersionFilter::Old,
-                            VersionFilter::Installed,
-                        ] {
-                            ui.selectable_value(&mut self.version_filter, filter, filter.label());
-                        }
-                    });
-                });
-            self.filters_open = header.openness > 0.0;
         });
+
+        // The loader installer lives at the bottom, as its own section:
+        // pick a Mojang release + a loader build and hit Install.
+        ui.add_space(6.0);
+        ui.separator();
+        self.ui_loader_row(ui, installing);
     }
 
     /// Render one row of the version list (Select / Install controls).
@@ -1862,65 +2013,63 @@ impl App {
     }
 
     fn ui_loader_row(&mut self, ui: &mut egui::Ui, installing: bool) {
-        ui.separator();
-        ui.strong("Mod loaders");
+        ui.strong("Install a mod loader");
         ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            for l in updater::Loader::ALL {
-                ui.selectable_value(&mut self.loader_pick, l, l.label());
-            }
-        });
 
-        // The Minecraft version loaders install onto: the selected version
-        // when it is a known Mojang release (stripped of a loader prefix),
-        // else the latest release from the manifest. Local-only or snapshot
-        // selections never reach the loader metas — that produced HTTP 400
-        // from Fabric/Quilt for ids they do not know.
-        let manifest_release = match &self.manifest {
-            Some(Ok(m)) => m.latest.get("release").cloned().unwrap_or_default(),
-            _ => String::new(),
-        };
-        let selected = self.settings.selected_version.trim().to_string();
-        let base = if selected.is_empty() {
-            String::new()
-        } else {
-            base_mc_of(&selected)
-        };
-        let base_is_release = self
+        // The game root must be configured; the installer writes into
+        // `<game dir>/versions/…`.
+        let game_dir = resolve_game_dir(&self.settings);
+        let game_dir_ok = !self.settings.game_directory.trim().is_empty() || game_dir.exists();
+        if !game_dir_ok {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                format!(
+                    "Root game directory is not set — configure it in Settings; installs would go to {}",
+                    game_dir.display()
+                ),
+            );
+        }
+
+        // Direct Mojang release choice (releases only).
+        let releases: Vec<String> = self
             .manifest
             .as_ref()
             .and_then(|r| r.as_ref().ok())
-            .is_some_and(|m| {
+            .map(|m| {
                 m.versions
                     .iter()
-                    .any(|v| v.id == base && v.kind == "release")
-            });
-        let mc = if base_is_release {
-            base
-        } else {
-            manifest_release
-        };
-        if mc.is_empty() {
-            ui.weak("Install a Mojang version (or load the manifest) to pick a loader build.");
+                    .filter(|v| v.kind == "release")
+                    .map(|v| v.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if releases.is_empty() {
+            ui.weak("Load the Mojang manifest (Refresh manifest) to pick a version.");
             return;
         }
+        let mc_selected = self
+            .loader_mc_pick
+            .clone()
+            .unwrap_or_else(|| releases[0].clone());
+        egui::ComboBox::from_label("Minecraft")
+            .width(160.0)
+            .selected_text(&mc_selected)
+            .show_ui(ui, |ui| {
+                for r in &releases {
+                    ui.selectable_value(
+                        self.loader_mc_pick
+                            .get_or_insert_with(|| releases[0].clone()),
+                        r.clone(),
+                        r,
+                    );
+                }
+            });
+        let mc = mc_selected;
 
-        // Only offer builds when the target is an installed or installable
-        // release; snapshots have no loader coverage and search hits on
-        // snapshot ids would just 404.
-        let known_release = self.versions.iter().any(|v| v.name == mc)
-            || self
-                .manifest
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .is_some_and(|m| m.versions.iter().any(|v| v.id == mc && v.kind == "release"));
+        // Loader + build.
         ui.horizontal(|ui| {
-            ui.label(format!("Target: {}", mc));
-            if !known_release {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    "not a known release — loaders may fail",
-                );
+            for l in updater::Loader::ALL {
+                ui.selectable_value(&mut self.loader_pick, l, l.label());
             }
         });
 
@@ -1941,18 +2090,6 @@ impl App {
                 ui.colored_label(egui::Color32::YELLOW, e.to_string());
             }
             Some(Some(Ok(builds))) => {
-                let current = self
-                    .loader_builds
-                    .get(&key)
-                    .and_then(|s| s.as_ref().and_then(|r| r.as_ref().ok()))
-                    .map(|b| b.len())
-                    .unwrap_or(0);
-                let _ = current;
-                let selected = self
-                    .loader_selected
-                    .get_or_insert_with(|| builds[0].version.clone())
-                    .clone();
-                let _ = selected;
                 egui::ComboBox::from_label(self.loader_pick.label())
                     .selected_text(
                         self.loader_selected
@@ -1981,9 +2118,9 @@ impl App {
                 if let Some(build) = builds.iter().find(|b| b.version == chosen) {
                     if ui
                         .add_enabled(
-                            !installing,
+                            !installing && game_dir_ok,
                             egui::Button::new(format!(
-                                "Install {} {}",
+                                "Install {} {} on {mc}",
                                 self.loader_pick.label(),
                                 build.version
                             )),
@@ -2302,12 +2439,17 @@ impl App {
         }
         ui.add_space(4.0);
 
-        // Content kind + search box.
-        ui.horizontal(|ui| {
+        // Content kind tabs: mods are the default, the rest follow the
+        // Modrinth project types.
+        ui.horizontal_wrapped(|ui| {
             for kind in [
                 content::ContentKind::Mod,
                 content::ContentKind::ResourcePack,
+                content::ContentKind::DataPack,
                 content::ContentKind::Shader,
+                content::ContentKind::Modpack,
+                content::ContentKind::Plugin,
+                content::ContentKind::Server,
                 content::ContentKind::World,
             ] {
                 ui.selectable_value(self.tab(platform).kind_slot(), kind, kind.label());
@@ -2368,6 +2510,10 @@ impl App {
                 .tab(platform)
                 .loader_filter
                 .map(|l| l.slug().to_string());
+            let mc = self.content_mc_filter.clone();
+            let categories: Vec<String> = self.tab(platform).category_filter.clone();
+            let license = self.tab(platform).license_filter.clone();
+            let sort = self.tab(platform).sort;
             self.tab(platform).loading = true;
             let api_key_task = api_key.clone();
             self.spawn_job(
@@ -2376,8 +2522,11 @@ impl App {
                         &crate::net::agent(),
                         kind,
                         &query,
-                        "",
+                        &mc,
                         loader.as_deref(),
+                        &categories,
+                        license.as_deref(),
+                        sort,
                         30,
                     )
                     .map_err(|e| e.to_string()),
@@ -2386,7 +2535,7 @@ impl App {
                         &api_key_task,
                         kind,
                         &query,
-                        "",
+                        &mc,
                         30,
                     )
                     .map_err(|e| e.to_string()),
@@ -2417,24 +2566,112 @@ impl App {
             Ok(items) => items,
         };
 
+        // Filter bar above the results: MC version, categories, license and
+        // sort (Modrinth facets; CurseForge gets MC only).
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("MC:");
+            let mc_w = ui.available_width() * 0.13;
+            ui.add(
+                egui::TextEdit::singleline(&mut self.content_mc_filter)
+                    .hint_text("any")
+                    .desired_width(mc_w),
+            );
+            if platform == ContentPlatform::Modrinth {
+                ui.separator();
+                ui.weak("Sort:");
+                egui::ComboBox::from_id_salt("content_sort")
+                    .selected_text(state.sort.label())
+                    .width(110.0)
+                    .show_ui(ui, |ui| {
+                        for s in [
+                            content::SortIndex::Relevance,
+                            content::SortIndex::Downloads,
+                            content::SortIndex::Follows,
+                            content::SortIndex::Newest,
+                            content::SortIndex::Updated,
+                        ] {
+                            ui.selectable_value(&mut self.tab(platform).sort, s, s.label());
+                        }
+                    });
+                if ui.button("Apply").clicked() {
+                    self.tab(platform).results = None; // re-run the search
+                }
+                ui.separator();
+                ui.weak("License:");
+                egui::ComboBox::from_id_salt("content_license")
+                    .selected_text(
+                        self.tab(platform)
+                            .license_filter
+                            .clone()
+                            .unwrap_or_else(|| "any".into()),
+                    )
+                    .width(110.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.tab(platform).license_filter, None, "any");
+                        for lic in COMMON_LICENSES {
+                            ui.selectable_value(
+                                &mut self.tab(platform).license_filter,
+                                Some(lic.to_string()),
+                                *lic,
+                            );
+                        }
+                    });
+                // Category chips for the current kind.
+                let cats = categories_for(state.kind);
+                if !cats.is_empty() {
+                    ui.separator();
+                    for cat in cats {
+                        let selected = state.category_filter.iter().any(|c| c == cat);
+                        if ui.selectable_label(selected, *cat).clicked() {
+                            let tab = self.tab(platform);
+                            if selected {
+                                tab.category_filter.retain(|c| c != cat);
+                            } else {
+                                tab.category_filter.push(cat.to_string());
+                            }
+                            tab.results = None;
+                        }
+                    }
+                }
+                if ui.button("Clear").clicked() {
+                    let tab = self.tab(platform);
+                    tab.category_filter.clear();
+                    tab.license_filter = None;
+                    tab.results = None;
+                }
+            }
+        });
+        ui.separator();
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             for item in items {
                 let open = state.open_project.as_deref() == Some(item.id.as_str());
+                // Card header: icon + title + author + stats.
                 ui.horizontal(|ui| {
-                    let header = egui::CollapsingHeader::new(format!(
-                        "{}  ·  {} downloads",
-                        item.title, item.downloads
-                    ))
+                    let header = egui::CollapsingHeader::new(egui::RichText::new(format!(
+                        "{}   ·   ↓ {}  ·  ♥ {}  ·  [{}]",
+                        item.title, item.downloads, item.follows, item.license
+                    )))
                     .id_salt((platform_slug(platform), item.id.as_str()))
                     .default_open(open)
                     .show(ui, |ui| {
-                        ui.weak(format!("by {} — {}", item.author, item.description));
+                        ui.weak(format!("by {}", item.author));
+                        ui.label(&item.description);
+                        if !item.categories.is_empty() {
+                            ui.weak(item.categories.join(" · "));
+                        }
 
-                        // Lazily load the file list when expanded.
+                        // The project detail tabs (Modrinth only: body page).
+                        if platform == ContentPlatform::Modrinth {
+                            self.content_detail_tabs(ui, platform, &item.id, &state);
+                        }
+
+                        // Versions + download buttons.
+                        ui.strong("Versions");
                         if !state.files.contains_key(&item.id) && !state.files_loading {
                             let id = item.id.clone();
                             let id_task = item.id.clone();
-                            let mc = base_mc_of(&self.settings.selected_version);
+                            let mc = self.content_mc_filter.trim().to_string();
                             let loader = self
                                 .tab(platform)
                                 .loader_filter
@@ -2467,16 +2704,16 @@ impl App {
                         }
                         match state.files.get(&item.id) {
                             None => {
-                                ui.weak("Loading files…");
+                                ui.weak("Loading versions…");
                             }
                             Some(None) => {
-                                ui.weak("No files for this MC version.");
+                                ui.weak("No versions for this MC version.");
                             }
                             Some(Some(Err(e))) => {
                                 ui.colored_label(egui::Color32::YELLOW, e.to_string());
                             }
                             Some(Some(Ok(files))) => {
-                                for file in files.iter().take(15) {
+                                for file in files.iter().take(20) {
                                     ui.horizontal(|ui| {
                                         ui.monospace(&file.name);
                                         ui.weak(format!(
@@ -2505,10 +2742,89 @@ impl App {
                         tab.open_project = if open { None } else { Some(item.id.clone()) };
                     }
                 });
+                ui.separator();
             }
         });
     }
 
+    /// The inner tabs of an open project: Description / Changelog (from the
+    /// latest version) / project page body.
+    fn content_detail_tabs(
+        &mut self,
+        ui: &mut egui::Ui,
+        platform: ContentPlatform,
+        project_id: &str,
+        state: &ContentSnapshot,
+    ) {
+        // Lazily fetch the project page.
+        if !state.detail.contains_key(project_id) {
+            let id_task = project_id.to_string();
+            let id_key = project_id.to_string();
+            self.spawn_job(
+                move || {
+                    content::modrinth_project(&crate::net::agent(), &id_task)
+                        .map_err(|e| e.to_string())
+                },
+                move |app, result| {
+                    app.tab(platform).detail.insert(id_key, Some(result));
+                },
+            );
+        }
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            for (i, label) in ["Description", "Links"].iter().enumerate() {
+                if ui.selectable_label(state.detail_tab == i, *label).clicked() {
+                    self.tab(platform).detail_tab = i;
+                }
+            }
+        });
+        match state.detail.get(project_id) {
+            None => {
+                ui.weak("Loading project page…");
+            }
+            Some(None) => {}
+            Some(Some(Err(e))) => {
+                ui.colored_label(egui::Color32::YELLOW, e.to_string());
+            }
+            Some(Some(Ok(detail))) => match state.detail_tab {
+                1 => {
+                    ui.horizontal_wrapped(|ui| {
+                        if !detail.source_url.is_empty() {
+                            ui.hyperlink_to("Source", &detail.source_url);
+                        }
+                        if !detail.issues_url.is_empty() {
+                            ui.hyperlink_to("Issues", &detail.issues_url);
+                        }
+                        if !detail.wiki_url.is_empty() {
+                            ui.hyperlink_to("Wiki", &detail.wiki_url);
+                        }
+                    });
+                    ui.weak(format!(
+                        "Updated: {} · {} game versions",
+                        detail.date_updated,
+                        detail.game_versions.len()
+                    ));
+                }
+                _ => {
+                    // The markdown body, rendered as plain text paragraphs.
+                    egui::ScrollArea::vertical()
+                        .max_height(220.0)
+                        .show(ui, |ui| {
+                            for line in detail.body.lines() {
+                                let line = line.trim();
+                                if line.is_empty() {
+                                    ui.add_space(2.0);
+                                } else if line.starts_with("#") {
+                                    ui.strong(line.trim_start_matches('#').trim());
+                                } else {
+                                    ui.label(strip_markdown(line));
+                                }
+                            }
+                        });
+                }
+            },
+        }
+    }
     fn tab(&mut self, platform: ContentPlatform) -> &mut ContentUi {
         match platform {
             ContentPlatform::Modrinth => &mut self.modrinth,
@@ -2530,6 +2846,13 @@ impl App {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = format!("downloading {}…", file.file_name);
         let game_dir = resolve_game_dir(&self.settings);
+        // Data packs, shaders, plugins and server jars land in the user's
+        // Downloads folder; mods and resource packs go into the game dir.
+        let game_dir = if kind.goes_to_downloads() {
+            dirs::download_dir().unwrap_or(game_dir)
+        } else {
+            game_dir
+        };
         let progress = self.content_progress.clone();
 
         self.spawn_job(

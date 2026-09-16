@@ -12,14 +12,17 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 use crate::net;
-
 /// The kind of downloadable content.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContentKind {
     #[default]
     Mod,
     ResourcePack,
+    DataPack,
     Shader,
+    Plugin,
+    Modpack,
+    Server,
     World,
 }
 
@@ -28,7 +31,11 @@ impl ContentKind {
         match self {
             ContentKind::Mod => "Mods",
             ContentKind::ResourcePack => "Resource Packs",
+            ContentKind::DataPack => "Data Packs",
             ContentKind::Shader => "Shaders",
+            ContentKind::Plugin => "Plugins",
+            ContentKind::Modpack => "Modpacks",
+            ContentKind::Server => "Servers",
             ContentKind::World => "Worlds",
         }
     }
@@ -38,8 +45,36 @@ impl ContentKind {
         match self {
             ContentKind::Mod => "mod",
             ContentKind::ResourcePack => "resourcepack",
+            ContentKind::DataPack => "datapack",
             ContentKind::Shader => "shader",
+            ContentKind::Plugin => "plugin",
+            ContentKind::Modpack => "modpack",
+            // Modrinth has no server project type; browse server software
+            // through the `plugin` type filtered to server loaders instead.
+            ContentKind::Server => "plugin",
             ContentKind::World => "world",
+        }
+    }
+
+    /// Whether downloads of this kind go to the user's Downloads folder
+    /// instead of the game directory (server-side things, packs whose
+    /// in-game folders are managed manually).
+    pub fn goes_to_downloads(self) -> bool {
+        matches!(
+            self,
+            ContentKind::DataPack | ContentKind::Shader | ContentKind::Plugin | ContentKind::Server
+        )
+    }
+
+    /// The destination directory inside the game dir (non-Downloads kinds).
+    pub fn dest_dir(self) -> &'static str {
+        match self {
+            ContentKind::Mod => "mods",
+            ContentKind::ResourcePack => "resourcepacks",
+            ContentKind::World => "saves",
+            // Modpacks unpack into their own versions/<id> dir at install.
+            ContentKind::Modpack => "versions",
+            _ => "downloads",
         }
     }
 
@@ -49,17 +84,42 @@ impl ContentKind {
             ContentKind::Mod => 6,           // Mods
             ContentKind::ResourcePack => 12, // Resource Packs
             ContentKind::Shader => 6555,     // Shaders
-            ContentKind::World => 17,        // World Gen / saves live under 17? Maps use 4471
+            ContentKind::World => 17,        // World Gen
+            _ => 6,
+        }
+    }
+}
+
+/// Modrinth search sort orders (the five the site offers).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SortIndex {
+    #[default]
+    Relevance,
+    Downloads,
+    Follows,
+    Newest,
+    Updated,
+}
+
+impl SortIndex {
+    pub fn label(self) -> &'static str {
+        match self {
+            SortIndex::Relevance => "Relevance",
+            SortIndex::Downloads => "Downloads",
+            SortIndex::Follows => "Follows",
+            SortIndex::Newest => "Newest",
+            SortIndex::Updated => "Updated",
         }
     }
 
-    /// The destination directory inside the game dir.
-    pub fn dest_dir(self) -> &'static str {
+    /// The `index=` query value.
+    pub fn param(self) -> &'static str {
         match self {
-            ContentKind::Mod => "mods",
-            ContentKind::ResourcePack => "resourcepacks",
-            ContentKind::Shader => "shaderpacks",
-            ContentKind::World => "saves",
+            SortIndex::Relevance => "relevance",
+            SortIndex::Downloads => "downloads",
+            SortIndex::Follows => "follows",
+            SortIndex::Newest => "newest",
+            SortIndex::Updated => "updated",
         }
     }
 }
@@ -77,6 +137,43 @@ pub struct ContentItem {
     /// Icon URL (may be empty; not rendered yet, kept for the UI).
     #[allow(dead_code)]
     pub icon_url: String,
+    /// Display categories (loaders + tags), lowercase.
+    pub categories: Vec<String>,
+    /// License short name (`MIT`, `LicenseRef-All-Rights-Reserved`, …).
+    #[allow(dead_code)] // displayed later in the project card
+    pub license: String,
+    /// Follows count (Modrinth).
+    pub follows: u64,
+    /// Date of the latest update (ISO-8601, may be empty).
+    #[allow(dead_code)] // displayed later in the project card
+    pub date_updated: String,
+}
+
+/// The long description of a project (Modrinth `body`, markdown).
+#[derive(Debug, Clone, Default)]
+pub struct ProjectDetail {
+    #[allow(dead_code)] // the title is in the card header
+    pub title: String,
+    #[allow(dead_code)]
+    pub description: String,
+    /// The full markdown body of the project page.
+    pub body: String,
+    #[allow(dead_code)]
+    pub license: String,
+    #[allow(dead_code)]
+    pub downloads: u64,
+    #[allow(dead_code)]
+    pub follows: u64,
+    #[allow(dead_code)]
+    pub icon_url: String,
+    #[allow(dead_code)]
+    pub categories: Vec<String>,
+    pub game_versions: Vec<String>,
+    pub date_updated: String,
+    /// Issue tracker / source links.
+    pub issues_url: String,
+    pub source_url: String,
+    pub wiki_url: String,
 }
 
 /// One downloadable version file of a content project.
@@ -117,7 +214,51 @@ struct ModrinthHit {
     #[serde(default)]
     downloads: u64,
     #[serde(default)]
+    follows: u64,
+    #[serde(default)]
     icon_url: String,
+    #[serde(default)]
+    display_categories: Vec<String>,
+    #[serde(default)]
+    license: String,
+    #[serde(default)]
+    date_modified: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ModrinthProject {
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    downloads: u64,
+    #[serde(default)]
+    followers: u64,
+    #[serde(default)]
+    icon_url: String,
+    #[serde(default)]
+    display_categories: Vec<String>,
+    #[serde(default)]
+    game_versions: Vec<String>,
+    #[serde(default)]
+    updated: String,
+    #[serde(default)]
+    issues_url: Option<String>,
+    #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
+    wiki_url: Option<String>,
+    #[serde(default)]
+    license: ModrinthLicense,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ModrinthLicense {
+    #[serde(default)]
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,31 +285,49 @@ struct ModrinthFile {
     #[serde(default)]
     primary: bool,
 }
-
 /// Search Modrinth for content.
+#[allow(clippy::too_many_arguments)]
 pub fn search_modrinth(
     agent: &ureq::Agent,
     kind: ContentKind,
     query: &str,
     mc: &str,
     loader: Option<&str>,
+    categories: &[String],
+    license: Option<&str>,
+    sort: SortIndex,
     limit: usize,
 ) -> Result<Vec<ContentItem>> {
+    // One facet group per dimension; values inside a group are OR, groups
+    // are AND (documented Labrinth behavior).
+    let mut facets: Vec<String> = vec![format!("[\"project_type:{}\"]", kind.modrinth_type())];
+    if !mc.trim().is_empty() {
+        facets.push(format!("[\"versions:{}\"]", urlquery(mc.trim())));
+    }
+    if let Some(loader) = loader {
+        if kind == ContentKind::Mod || kind == ContentKind::Plugin {
+            facets.push(format!("[\"categories:{}\"]", urlquery(loader)));
+        }
+    }
+    if !categories.is_empty() {
+        let inner: Vec<String> = categories
+            .iter()
+            .map(|c| format!("\"categories:{}\"", urlquery(c)))
+            .collect();
+        facets.push(format!("[{}]", inner.join(",")));
+    }
+    if let Some(license) = license {
+        if !license.trim().is_empty() {
+            facets.push(format!("[\"license:{}\"]", urlquery(license.trim())));
+        }
+    }
     let mut url = format!(
-        "https://api.modrinth.com/v2/search?limit={limit}&index=downloads&facets=[[%22project_type:{}%22]]",
-        kind.modrinth_type()
+        "https://api.modrinth.com/v2/search?limit={limit}&index={}&facets=%5B{}%5D",
+        sort.param(),
+        urlquery(&facets.join(","))
     );
     if !query.trim().is_empty() {
         url.push_str(&format!("&query={}", urlquery(query.trim())));
-    }
-    if !mc.is_empty() {
-        url.push_str(&format!(",[[%22versions:{}%22]]", urlquery(mc)));
-    }
-    if let Some(loader) = loader {
-        // Only mods are loader-specific on Modrinth.
-        if kind == ContentKind::Mod {
-            url.push_str(&format!(",[[%22categories:{}%22]]", urlquery(loader)));
-        }
     }
     let body = net::get_string(agent, &url)?;
     let parsed: ModrinthSearch =
@@ -183,8 +342,37 @@ pub fn search_modrinth(
             description: h.description,
             downloads: h.downloads,
             icon_url: h.icon_url,
+            categories: h.display_categories,
+            license: h.license,
+            follows: h.follows,
+            date_updated: h.date_modified,
         })
         .collect())
+}
+
+/// Fetch the full project page of a Modrinth project.
+pub fn modrinth_project(agent: &ureq::Agent, project_id: &str) -> Result<ProjectDetail> {
+    let body = net::get_string(
+        agent,
+        &format!("https://api.modrinth.com/v2/project/{project_id}"),
+    )?;
+    let parsed: ModrinthProject =
+        serde_json::from_str(&body).context("failed to parse the Modrinth project")?;
+    Ok(ProjectDetail {
+        title: parsed.title,
+        description: parsed.description,
+        body: parsed.body,
+        license: parsed.license.id,
+        downloads: parsed.downloads,
+        follows: parsed.followers,
+        icon_url: parsed.icon_url,
+        categories: parsed.display_categories,
+        game_versions: parsed.game_versions,
+        date_updated: parsed.updated,
+        issues_url: parsed.issues_url.unwrap_or_default(),
+        source_url: parsed.source_url.unwrap_or_default(),
+        wiki_url: parsed.wiki_url.unwrap_or_default(),
+    })
 }
 
 /// List the downloadable files of a Modrinth project, newest first.
@@ -292,6 +480,10 @@ pub fn search_curseforge(
             description: m.summary,
             downloads: m.download_count,
             icon_url: m.logo.map(|l| l.thumbnail_url).unwrap_or_default(),
+            categories: Vec::new(),
+            license: String::new(),
+            follows: 0,
+            date_updated: m.date_modified,
         })
         .collect())
 }
@@ -314,6 +506,8 @@ struct CurseMod {
     authors: Vec<CurseAuthor>,
     #[serde(default)]
     logo: Option<CurseLogo>,
+    #[serde(default, rename = "dateModified")]
+    date_modified: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -523,8 +717,56 @@ mod tests {
     fn dest_dirs_match_vanilla_layout() {
         assert_eq!(ContentKind::Mod.dest_dir(), "mods");
         assert_eq!(ContentKind::ResourcePack.dest_dir(), "resourcepacks");
-        assert_eq!(ContentKind::Shader.dest_dir(), "shaderpacks");
         assert_eq!(ContentKind::World.dest_dir(), "saves");
+        // Things without an in-game folder go to the user's Downloads.
+        assert!(ContentKind::DataPack.goes_to_downloads());
+        assert!(ContentKind::Shader.goes_to_downloads());
+        assert!(ContentKind::Plugin.goes_to_downloads());
+        assert!(ContentKind::Server.goes_to_downloads());
+        assert!(!ContentKind::Mod.goes_to_downloads());
+        assert!(!ContentKind::ResourcePack.goes_to_downloads());
+    }
+
+    #[test]
+    fn sort_index_covers_all_five_modrinth_orders() {
+        assert_eq!(SortIndex::default(), SortIndex::Relevance);
+        let params: Vec<&str> = [
+            SortIndex::Relevance,
+            SortIndex::Downloads,
+            SortIndex::Follows,
+            SortIndex::Newest,
+            SortIndex::Updated,
+        ]
+        .iter()
+        .map(|s| s.param())
+        .collect();
+        assert_eq!(
+            params,
+            vec!["relevance", "downloads", "follows", "newest", "updated"]
+        );
+    }
+
+    #[test]
+    fn modrinth_project_parses() {
+        let body = r#"{
+            "title": "Sodium",
+            "description": "fast",
+            "body": "Text with [link](http://x) inside.",
+            "downloads": 100,
+            "followers": 10,
+            "icon_url": "",
+            "display_categories": ["fabric", "optimization"],
+            "game_versions": ["1.21.4"],
+            "updated": "2026-01-01T00:00:00Z",
+            "issues_url": "http://issues",
+            "source_url": null,
+            "wiki_url": null,
+            "license": {"id": "LicenseRef-Polyform-Shield-1.0.0"}
+        }"#;
+        let parsed: ModrinthProject = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed.title, "Sodium");
+        assert_eq!(parsed.license.id, "LicenseRef-Polyform-Shield-1.0.0");
+        assert_eq!(parsed.game_versions.len(), 1);
     }
 
     #[test]
