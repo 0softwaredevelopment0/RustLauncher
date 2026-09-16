@@ -44,6 +44,8 @@ pub struct App {
     pub launch_error: Option<String>,
     /// A Stop/Kill confirmation dialog is open, guarding this action.
     terminate_confirm: Option<TerminateKind>,
+    /// Live state of the "Don't ask again" checkbox while the dialog is open.
+    terminate_dont_ask: bool,
 
     // Game process.
     pub console: Arc<Mutex<Vec<String>>>,
@@ -223,6 +225,7 @@ impl App {
             play_status: String::new(),
             launch_error: None,
             terminate_confirm: None,
+            terminate_dont_ask: false,
             console: Arc::new(Mutex::new(Vec::new())),
             console_seq: 0,
             game_running: Arc::new(AtomicBool::new(false)),
@@ -497,10 +500,12 @@ impl App {
         };
         let screen = ctx.screen_rect();
 
-        // Dim everything behind the dialog (above panels/windows); clicking
-        // the dimmed area cancels.
+        // Dim everything behind the dialog. Layer stack (egui): Background
+        // < Panels < Middle < Foreground < Tooltip, so the dim area in
+        // Middle covers the panels but sits below the Foreground dialog —
+        // it never swallows clicks meant for the dialog itself.
         egui::Area::new(egui::Id::new("terminate_confirm_dim"))
-            .order(egui::Order::Tooltip)
+            .order(egui::Order::Middle)
             .fixed_pos(screen.left_top())
             .show(ctx, |ui| {
                 let resp = ui.allocate_rect(screen, egui::Sense::click());
@@ -511,8 +516,9 @@ impl App {
                 }
             });
 
-        // The dialog itself sits above the dim layer.
-        let mut dont_ask_again = false;
+        // The dialog itself sits above the dim layer. The checkbox state
+        // lives on App so it survives across frames while open (it is
+        // reset when the dialog opens, see the Stop/Kill click handlers).
         let kill_confirmed = kind == TerminateKind::Kill;
         egui::Area::new(egui::Id::new("terminate_confirm_dialog"))
             .order(egui::Order::Foreground)
@@ -529,7 +535,7 @@ impl App {
                     });
 
                     ui.add_space(10.0);
-                    ui.checkbox(&mut dont_ask_again, "Don't ask again");
+                    ui.checkbox(&mut self.terminate_dont_ask, "Don't ask again");
 
                     ui.add_space(10.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -538,7 +544,7 @@ impl App {
                             .clicked()
                         {
                             self.terminate_confirm = None;
-                            if dont_ask_again {
+                            if self.terminate_dont_ask {
                                 match kind {
                                     TerminateKind::Stop => self.settings.confirm_stop = false,
                                     TerminateKind::Kill => self.settings.confirm_kill = false,
@@ -885,6 +891,7 @@ impl App {
             }
             if ui.button("Stop").clicked() {
                 if self.game_running.load(Ordering::SeqCst) && self.settings.confirm_stop {
+                    self.terminate_dont_ask = false;
                     self.terminate_confirm = Some(TerminateKind::Stop);
                 } else {
                     self.stop_game();
@@ -899,6 +906,7 @@ impl App {
                 .clicked()
             {
                 if self.settings.confirm_kill {
+                    self.terminate_dont_ask = false;
                     self.terminate_confirm = Some(TerminateKind::Kill);
                 } else {
                     self.kill_game();
