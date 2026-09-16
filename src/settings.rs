@@ -41,6 +41,8 @@ pub struct Settings {
     pub dark_theme: bool,
     /// Ask for confirmation before force-killing the game (Kill button).
     pub confirm_kill: bool,
+    /// Ask for confirmation before politely stopping the game (Stop button).
+    pub confirm_stop: bool,
 }
 
 impl Default for Settings {
@@ -61,6 +63,7 @@ impl Default for Settings {
             all_logs: false,
             dark_theme: true,
             confirm_kill: true,
+            confirm_stop: true,
         }
     }
 }

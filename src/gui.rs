@@ -42,8 +42,8 @@ pub struct App {
     pub username_input: String,
     pub play_status: String,
     pub launch_error: Option<String>,
-    /// The force-kill confirmation dialog is open.
-    kill_confirm_open: bool,
+    /// A Stop/Kill confirmation dialog is open, guarding this action.
+    terminate_confirm: Option<TerminateKind>,
 
     // Game process.
     pub console: Arc<Mutex<Vec<String>>>,
@@ -91,6 +91,13 @@ pub struct App {
     jobs: Arc<Mutex<Vec<Job>>>,
     /// Handle used by background threads to wake the UI when a job finishes.
     ctx: egui::Context,
+}
+
+/// Which destructive action the confirmation dialog is guarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminateKind {
+    Stop,
+    Kill,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +222,7 @@ impl App {
             screen: Screen::General,
             play_status: String::new(),
             launch_error: None,
-            kill_confirm_open: false,
+            terminate_confirm: None,
             console: Arc::new(Mutex::new(Vec::new())),
             console_seq: 0,
             game_running: Arc::new(AtomicBool::new(false)),
@@ -475,14 +482,24 @@ impl App {
         self.play_status = "Stop requested".into();
     }
 
-    /// The force-kill confirmation dialog: material warning triangle,
+    /// The Stop/Kill confirmation dialog: material warning triangle,
     /// a "don't ask again" checkbox, and Confirm / Cancel buttons.
-    fn show_kill_confirmation(&mut self, ctx: &egui::Context) {
+    fn show_terminate_confirmation(&mut self, ctx: &egui::Context, kind: TerminateKind) {
+        let (title, body) = match kind {
+            TerminateKind::Stop => (
+                "Stop the game?",
+                "The game will be asked to close. It usually exits within a few seconds, but unsaved progress may be lost.",
+            ),
+            TerminateKind::Kill => (
+                "Force kill the game?",
+                "The game process tree will be terminated immediately. Unsaved progress will be lost.",
+            ),
+        };
         let screen = ctx.screen_rect();
 
         // Dim everything behind the dialog (above panels/windows); clicking
         // the dimmed area cancels.
-        egui::Area::new(egui::Id::new("kill_confirm_dim"))
+        egui::Area::new(egui::Id::new("terminate_confirm_dim"))
             .order(egui::Order::Tooltip)
             .fixed_pos(screen.left_top())
             .show(ctx, |ui| {
@@ -490,13 +507,14 @@ impl App {
                 ui.painter()
                     .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
                 if resp.clicked() {
-                    self.kill_confirm_open = false;
+                    self.terminate_confirm = None;
                 }
             });
 
         // The dialog itself sits above the dim layer.
         let mut dont_ask_again = false;
-        egui::Area::new(egui::Id::new("kill_confirm_dialog"))
+        let kill_confirmed = kind == TerminateKind::Kill;
+        egui::Area::new(egui::Id::new("terminate_confirm_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
@@ -505,12 +523,8 @@ impl App {
                         draw_warning_triangle(ui, 36.0);
                         ui.add_space(6.0);
                         ui.vertical(|ui| {
-                            ui.label(
-                                egui::RichText::new("Force kill the game?")
-                                    .strong()
-                                    .size(16.0),
-                            );
-                            ui.label("The game process tree will be terminated immediately. Unsaved progress will be lost.");
+                            ui.label(egui::RichText::new(title).strong().size(16.0));
+                            ui.label(body);
                         });
                     });
 
@@ -523,15 +537,22 @@ impl App {
                             .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
                             .clicked()
                         {
-                            self.kill_confirm_open = false;
+                            self.terminate_confirm = None;
                             if dont_ask_again {
-                                self.settings.confirm_kill = false;
+                                match kind {
+                                    TerminateKind::Stop => self.settings.confirm_stop = false,
+                                    TerminateKind::Kill => self.settings.confirm_kill = false,
+                                }
                                 self.save_settings();
                             }
-                            self.kill_game();
+                            if kill_confirmed {
+                                self.kill_game();
+                            } else {
+                                self.stop_game();
+                            }
                         }
                         if ui.button("Cancel").clicked() {
-                            self.kill_confirm_open = false;
+                            self.terminate_confirm = None;
                         }
                     });
                 });
@@ -863,7 +884,11 @@ impl App {
                 self.reload_versions();
             }
             if ui.button("Stop").clicked() {
-                self.stop_game();
+                if self.game_running.load(Ordering::SeqCst) && self.settings.confirm_stop {
+                    self.terminate_confirm = Some(TerminateKind::Stop);
+                } else {
+                    self.stop_game();
+                }
             }
             let kill_enabled = self.game_running.load(Ordering::SeqCst);
             let kill =
@@ -874,16 +899,16 @@ impl App {
                 .clicked()
             {
                 if self.settings.confirm_kill {
-                    self.kill_confirm_open = true;
+                    self.terminate_confirm = Some(TerminateKind::Kill);
                 } else {
                     self.kill_game();
                 }
             }
         });
 
-        if self.kill_confirm_open {
+        if let Some(kind) = self.terminate_confirm {
             let ctx = ui.ctx().clone();
-            self.show_kill_confirmation(&ctx);
+            self.show_terminate_confirmation(&ctx, kind);
         }
 
         if !self.play_status.is_empty() {
