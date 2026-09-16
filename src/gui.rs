@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result};
 
 use crate::accounts::AccountStore;
 use crate::auth;
+use crate::content;
 use crate::diagnostics;
 use crate::home::{self};
 use crate::launcher::{self, LaunchPlan};
@@ -34,6 +35,90 @@ type Job = Box<dyn FnOnce(&mut App) + Send>;
 /// Cached loader builds for one (loader, mc-version) pair.
 type LoaderBuildsCache =
     BTreeMap<(updater::Loader, String), Option<Result<Vec<updater::LoaderBuild>, String>>>;
+
+/// Which platform a content tab browses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentPlatform {
+    Modrinth,
+    CurseForge,
+}
+
+fn platform_slug(platform: ContentPlatform) -> &'static str {
+    match platform {
+        ContentPlatform::Modrinth => "modrinth",
+        ContentPlatform::CurseForge => "curseforge",
+    }
+}
+
+/// Whether the content kind is loader-specific (mods are; packs are not).
+fn kind_uses_loader(kind: content::ContentKind) -> bool {
+    kind == content::ContentKind::Mod
+}
+
+/// UI state of one mod-platform tab.
+#[derive(Default)]
+struct ContentUi {
+    kind: content::ContentKind,
+    search: String,
+    loader_filter: Option<updater::Loader>,
+    /// Search results, loaded lazily.
+    results: Option<Result<Vec<content::ContentItem>, String>>,
+    loading: bool,
+    /// The project whose file list is expanded.
+    open_project: Option<String>,
+    files: BTreeMap<String, Option<Result<Vec<content::ContentFile>, String>>>,
+    files_loading: bool,
+}
+
+impl ContentUi {
+    fn kind_slot(&mut self) -> &mut content::ContentKind {
+        &mut self.kind
+    }
+
+    fn search_slot(&mut self) -> &mut String {
+        &mut self.search
+    }
+
+    fn loader_slot(&mut self) -> &mut Option<updater::Loader> {
+        &mut self.loader_filter
+    }
+
+    /// An owned read-only snapshot of the render-relevant state; lets the
+    /// egui closures read it while `self` is borrowed for spawn_job.
+    fn snapshot(&self) -> ContentSnapshot {
+        ContentSnapshot {
+            kind: self.kind,
+            results: self.results.as_ref().map(|r| match r {
+                Ok(items) => Ok(items.clone()),
+                Err(e) => Err(e.clone()),
+            }),
+            open_project: self.open_project.clone(),
+            files: self
+                .files
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        v.as_ref().map(|r| match r {
+                            Ok(files) => Ok(files.clone()),
+                            Err(e) => Err(e.clone()),
+                        }),
+                    )
+                })
+                .collect(),
+            files_loading: self.files_loading,
+        }
+    }
+}
+
+/// The owned snapshot [`ContentUi::snapshot`] hands to the render pass.
+struct ContentSnapshot {
+    kind: content::ContentKind,
+    results: Option<Result<Vec<content::ContentItem>, String>>,
+    open_project: Option<String>,
+    files: BTreeMap<String, Option<Result<Vec<content::ContentFile>, String>>>,
+    files_loading: bool,
+}
 
 pub struct App {
     home_dir: PathBuf,
@@ -76,6 +161,12 @@ pub struct App {
     pub loader_selected: Option<String>,
     /// Whether the Filters section at the bottom of the Versions tab is open.
     pub filters_open: bool,
+
+    // Mod-platform tabs (Modrinth / CurseForge), one shared state each.
+    modrinth: ContentUi,
+    curseforge: ContentUi,
+    content_downloading: bool,
+    content_progress: Arc<Mutex<String>>,
 
     // Servers.
     pub server_status: BTreeMap<usize, String>,
@@ -132,6 +223,8 @@ pub enum Screen {
     Servers,
     Accounts,
     Skins,
+    Modrinth,
+    CurseForge,
     News,
     Settings,
     Diagnostics,
@@ -343,7 +436,11 @@ impl App {
             loader_builds: BTreeMap::new(),
             loader_builds_loading: false,
             loader_selected: None,
-            filters_open: false,
+            filters_open: true,
+            modrinth: ContentUi::default(),
+            curseforge: ContentUi::default(),
+            content_downloading: false,
+            content_progress: Arc::new(Mutex::new(String::new())),
             server_status: BTreeMap::new(),
             new_server_name: String::new(),
             new_server_addr: String::new(),
@@ -1324,6 +1421,8 @@ impl eframe::App for App {
                 (Screen::Servers, "⛶  Servers"),
                 (Screen::Accounts, "◉  Accounts"),
                 (Screen::Skins, "☺  Skins"),
+                (Screen::Modrinth, "⬢  Modrinth"),
+                (Screen::CurseForge, "☩  CurseForge"),
                 (Screen::News, "✉  News"),
                 (Screen::Settings, "⚙  Settings"),
                 (Screen::Diagnostics, "✚  Diagnostics"),
@@ -1356,6 +1455,8 @@ impl eframe::App for App {
             Screen::Servers => self.ui_servers(ui),
             Screen::Accounts => self.ui_accounts(ui),
             Screen::Skins => self.ui_skins(ui, ctx),
+            Screen::Modrinth => self.ui_content(ui, ContentPlatform::Modrinth),
+            Screen::CurseForge => self.ui_content(ui, ContentPlatform::CurseForge),
             Screen::News => self.ui_news(ui),
             Screen::Settings => self.ui_settings(ui),
             Screen::Diagnostics => self.ui_diagnostics(ui),
@@ -1771,20 +1872,36 @@ impl App {
         });
 
         // The Minecraft version loaders install onto: the selected version
-        // (stripped of a loader prefix, so having a loader version picked
-        // targets its base MC), else the latest release from the manifest.
+        // when it is a known Mojang release (stripped of a loader prefix),
+        // else the latest release from the manifest. Local-only or snapshot
+        // selections never reach the loader metas — that produced HTTP 400
+        // from Fabric/Quilt for ids they do not know.
         let manifest_release = match &self.manifest {
             Some(Ok(m)) => m.latest.get("release").cloned().unwrap_or_default(),
             _ => String::new(),
         };
         let selected = self.settings.selected_version.trim().to_string();
-        let mc = if !selected.is_empty() {
+        let base = if selected.is_empty() {
+            String::new()
+        } else {
             base_mc_of(&selected)
+        };
+        let base_is_release = self
+            .manifest
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .is_some_and(|m| {
+                m.versions
+                    .iter()
+                    .any(|v| v.id == base && v.kind == "release")
+            });
+        let mc = if base_is_release {
+            base
         } else {
             manifest_release
         };
         if mc.is_empty() {
-            ui.weak("Select or install a Mojang version to pick a loader build.");
+            ui.weak("Install a Mojang version (or load the manifest) to pick a loader build.");
             return;
         }
 
@@ -2164,6 +2281,284 @@ impl App {
         }
     }
 
+    /// The Modrinth/CurseForge tab: search content, pick a file, install it
+    /// into the game directory. Tab state is accessed via `self.tab(platform)`
+    /// to keep borrow conflicts out of the render closures.
+    fn ui_content(&mut self, ui: &mut egui::Ui, platform: ContentPlatform) {
+        let api_key = match platform {
+            ContentPlatform::Modrinth => String::new(),
+            ContentPlatform::CurseForge => self.settings.curseforge_api_key.clone(),
+        };
+
+        ui.heading(match platform {
+            ContentPlatform::Modrinth => "Modrinth",
+            ContentPlatform::CurseForge => "CurseForge",
+        });
+        if platform == ContentPlatform::CurseForge && api_key.trim().is_empty() {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "CurseForge needs an API key — set it in Settings (section CurseForge).",
+            );
+        }
+        ui.add_space(4.0);
+
+        // Content kind + search box.
+        ui.horizontal(|ui| {
+            for kind in [
+                content::ContentKind::Mod,
+                content::ContentKind::ResourcePack,
+                content::ContentKind::Shader,
+                content::ContentKind::World,
+            ] {
+                ui.selectable_value(self.tab(platform).kind_slot(), kind, kind.label());
+            }
+        });
+        ui.horizontal(|ui| {
+            draw_search_icon(ui, 16.0, ui.visuals().text_color());
+            let response = ui.add(
+                egui::TextEdit::singleline(self.tab(platform).search_slot())
+                    .hint_text("Search…")
+                    .desired_width(260.0),
+            );
+            let target_mc = base_mc_of(&self.settings.selected_version);
+            ui.weak(format!(
+                "MC: {}",
+                if target_mc.is_empty() {
+                    "—"
+                } else {
+                    &target_mc
+                }
+            ));
+            // Loader filter (mods only; Modrinth has loader facets).
+            if kind_uses_loader(self.tab(platform).kind) {
+                ui.separator();
+                let loader_filter = self.tab(platform).loader_filter;
+                ui.selectable_value(self.tab(platform).loader_slot(), None, "any loader");
+                for l in updater::Loader::ALL {
+                    ui.selectable_value(self.tab(platform).loader_slot(), Some(l), l.label());
+                }
+                let _ = loader_filter;
+            }
+            let search_pressed = ui.button("Search").clicked()
+                || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if search_pressed {
+                let tab = self.tab(platform);
+                tab.results = None;
+                tab.open_project = None;
+                tab.files.clear();
+            }
+        });
+
+        let installing = self.installing.load(Ordering::SeqCst) || self.content_downloading;
+        let progress = self
+            .content_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if installing && !progress.is_empty() {
+            ui.label(&progress);
+        }
+        ui.separator();
+
+        // Lazily run the search.
+        if self.tab(platform).results.is_none() && !self.tab(platform).loading {
+            let kind = self.tab(platform).kind;
+            let query = self.tab(platform).search.clone();
+            let loader = self
+                .tab(platform)
+                .loader_filter
+                .map(|l| l.slug().to_string());
+            self.tab(platform).loading = true;
+            let api_key_task = api_key.clone();
+            self.spawn_job(
+                move || match platform {
+                    ContentPlatform::Modrinth => content::search_modrinth(
+                        &crate::net::agent(),
+                        kind,
+                        &query,
+                        "",
+                        loader.as_deref(),
+                        30,
+                    )
+                    .map_err(|e| e.to_string()),
+                    ContentPlatform::CurseForge => content::search_curseforge(
+                        &crate::net::agent(),
+                        &api_key_task,
+                        kind,
+                        &query,
+                        "",
+                        30,
+                    )
+                    .map_err(|e| e.to_string()),
+                },
+                move |app, result| {
+                    let tab = app.tab(platform);
+                    tab.results = Some(result);
+                    tab.loading = false;
+                },
+            );
+        }
+
+        // Read-only snapshot of the state needed to render the results.
+        let state = self.tab(platform).snapshot();
+        let Some(results) = &state.results else {
+            ui.weak("Type a query and press Search.");
+            return;
+        };
+        let items = match results {
+            Err(e) => {
+                ui.colored_label(egui::Color32::YELLOW, e.to_string());
+                return;
+            }
+            Ok(items) if items.is_empty() => {
+                ui.weak("Nothing found.");
+                return;
+            }
+            Ok(items) => items,
+        };
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for item in items {
+                let open = state.open_project.as_deref() == Some(item.id.as_str());
+                ui.horizontal(|ui| {
+                    let header = egui::CollapsingHeader::new(format!(
+                        "{}  ·  {} downloads",
+                        item.title, item.downloads
+                    ))
+                    .id_salt((platform_slug(platform), item.id.as_str()))
+                    .default_open(open)
+                    .show(ui, |ui| {
+                        ui.weak(format!("by {} — {}", item.author, item.description));
+
+                        // Lazily load the file list when expanded.
+                        if !state.files.contains_key(&item.id) && !state.files_loading {
+                            let id = item.id.clone();
+                            let id_task = item.id.clone();
+                            let mc = base_mc_of(&self.settings.selected_version);
+                            let loader = self
+                                .tab(platform)
+                                .loader_filter
+                                .map(|l| l.slug().to_string());
+                            self.tab(platform).files_loading = true;
+                            let api_key_task = api_key.clone();
+                            self.spawn_job(
+                                move || match platform {
+                                    ContentPlatform::Modrinth => content::modrinth_versions(
+                                        &crate::net::agent(),
+                                        &id_task,
+                                        &mc,
+                                        loader.as_deref(),
+                                    )
+                                    .map_err(|e| e.to_string()),
+                                    ContentPlatform::CurseForge => content::curseforge_files(
+                                        &crate::net::agent(),
+                                        &api_key_task,
+                                        &id_task,
+                                        &mc,
+                                    )
+                                    .map_err(|e| e.to_string()),
+                                },
+                                move |app, result| {
+                                    let tab = app.tab(platform);
+                                    tab.files.insert(id, Some(result));
+                                    tab.files_loading = false;
+                                },
+                            );
+                        }
+                        match state.files.get(&item.id) {
+                            None => {
+                                ui.weak("Loading files…");
+                            }
+                            Some(None) => {
+                                ui.weak("No files for this MC version.");
+                            }
+                            Some(Some(Err(e))) => {
+                                ui.colored_label(egui::Color32::YELLOW, e.to_string());
+                            }
+                            Some(Some(Ok(files))) => {
+                                for file in files.iter().take(15) {
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(&file.name);
+                                        ui.weak(format!(
+                                            "{:.1} MB",
+                                            file.size as f32 / 1_048_576.0
+                                        ));
+                                        let label = if installing { "…" } else { "Download" };
+                                        if ui
+                                            .add_enabled(!installing, egui::Button::new(label))
+                                            .clicked()
+                                        {
+                                            self.download_content(
+                                                platform,
+                                                state.kind,
+                                                item.clone(),
+                                                file.clone(),
+                                            );
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    });
+                    if header.header_response.clicked() {
+                        let tab = self.tab(platform);
+                        tab.open_project = if open { None } else { Some(item.id.clone()) };
+                    }
+                });
+            }
+        });
+    }
+
+    fn tab(&mut self, platform: ContentPlatform) -> &mut ContentUi {
+        match platform {
+            ContentPlatform::Modrinth => &mut self.modrinth,
+            ContentPlatform::CurseForge => &mut self.curseforge,
+        }
+    }
+
+    /// Download one content file in the background.
+    fn download_content(
+        &mut self,
+        platform: ContentPlatform,
+        kind: content::ContentKind,
+        item: content::ContentItem,
+        file: content::ContentFile,
+    ) {
+        self.content_downloading = true;
+        *self
+            .content_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = format!("downloading {}…", file.file_name);
+        let game_dir = resolve_game_dir(&self.settings);
+        let progress = self.content_progress.clone();
+
+        self.spawn_job(
+            move || {
+                let agent = crate::net::agent();
+                let result = content::download_file(&agent, &game_dir, kind, &file);
+                progress.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                result.map_err(|e| e.to_string())
+            },
+            move |app, result| {
+                app.content_downloading = false;
+                match result {
+                    Ok(path) => {
+                        let msg = format!("{} installed to {}", item.title, path.display());
+                        app.log_console(format!("[RustLauncher] {msg}"));
+                        app.notify_info(msg);
+                    }
+                    Err(e) => {
+                        let code = match platform {
+                            ContentPlatform::Modrinth => "MODRINTH",
+                            ContentPlatform::CurseForge => "CURSEFORGE",
+                        };
+                        app.notify_error(code, e);
+                    }
+                }
+            },
+        );
+    }
+
     fn ui_news(&mut self, ui: &mut egui::Ui) {
         ui.heading("News");
         ui.add_space(4.0);
@@ -2365,6 +2760,18 @@ impl App {
                 &mut self.settings.use_custom_resolution,
                 "Custom resolution",
             );
+
+            ui.strong("CurseForge");
+            ui.horizontal(|ui| {
+                ui.label("API key");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.curseforge_api_key)
+                        .hint_text("paste your CFCore API key")
+                        .desired_width(360.0),
+                );
+            });
+            ui.weak("Get one at https://console.curseforge.com — the Modrinth tab needs no key.");
+            ui.add_space(4.0);
 
             ui.strong("Launcher");
             ui.checkbox(

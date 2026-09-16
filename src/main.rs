@@ -11,6 +11,7 @@ mod accounts;
 mod auth;
 mod classpath;
 mod cli;
+mod content;
 mod diagnostics;
 mod gui;
 mod home;

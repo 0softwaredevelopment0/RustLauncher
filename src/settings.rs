@@ -43,6 +43,8 @@ pub struct Settings {
     pub confirm_kill: bool,
     /// Ask for confirmation before politely stopping the game (Stop button).
     pub confirm_stop: bool,
+    /// CurseForge API key (CFCore v1); empty disables the CurseForge tab.
+    pub curseforge_api_key: String,
 }
 
 impl Default for Settings {
@@ -64,6 +66,7 @@ impl Default for Settings {
             dark_theme: true,
             confirm_kill: true,
             confirm_stop: true,
+            curseforge_api_key: String::new(),
         }
     }
 }
