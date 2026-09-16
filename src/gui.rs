@@ -878,9 +878,7 @@ fn toast_body(ui: &mut egui::Ui, toast: &Toast, slide_offset: f32, index: usize)
                 ui.horizontal(|ui| {
                     match toast.kind {
                         ToastKind::Error => draw_warning_triangle(ui, 24.0),
-                        ToastKind::Info => {
-                            ui.label(egui::RichText::new("ℹ").size(20.0));
-                        }
+                        ToastKind::Info => draw_info_icon(ui, 24.0),
                     }
                     ui.add_space(2.0);
                     ui.vertical(|ui| {
@@ -983,6 +981,33 @@ fn draw_warning_triangle(ui: &mut egui::Ui, height: f32) {
         egui::pos2(cx, rect.top() + height * 0.78),
         height * 0.06,
         BLACK,
+    );
+}
+
+/// Draw a material-style info icon: a filled blue circle with a white "i",
+/// the counterpart of [`draw_warning_triangle`] for informational toasts.
+fn draw_info_icon(ui: &mut egui::Ui, height: f32) {
+    const BLUE: egui::Color32 = egui::Color32::from_rgb(0x21, 0x96, 0xF3); // blue 500
+    const WHITE: egui::Color32 = egui::Color32::WHITE;
+
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(height, height), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    let c = rect.center();
+
+    p.circle_filled(c, height / 2.0, BLUE);
+
+    // The "i": a dot above, a stem below.
+    p.circle_filled(
+        egui::pos2(c.x, rect.top() + height * 0.30),
+        height * 0.055,
+        WHITE,
+    );
+    p.line_segment(
+        [
+            egui::pos2(c.x, rect.top() + height * 0.46),
+            egui::pos2(c.x, rect.top() + height * 0.72),
+        ],
+        egui::Stroke::new(height * 0.09, WHITE),
     );
 }
 
