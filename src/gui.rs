@@ -74,6 +74,8 @@ pub struct App {
     pub loader_builds_loading: bool,
     /// The loader build chosen in the combo box for the current target.
     pub loader_selected: Option<String>,
+    /// Whether the Filters section at the bottom of the Versions tab is open.
+    pub filters_open: bool,
 
     // Servers.
     pub server_status: BTreeMap<usize, String>,
@@ -341,6 +343,7 @@ impl App {
             loader_builds: BTreeMap::new(),
             loader_builds_loading: false,
             loader_selected: None,
+            filters_open: false,
             server_status: BTreeMap::new(),
             new_server_name: String::new(),
             new_server_addr: String::new(),
@@ -1267,6 +1270,30 @@ fn draw_info_icon(ui: &mut egui::Ui, height: f32) {
     );
 }
 
+/// A material-style magnifying-glass icon (search), stroked in the text
+/// color so it sits naturally in front of a text input.
+fn draw_search_icon(ui: &mut egui::Ui, height: f32, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(height, height), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+
+    // Lens circle, offset toward the top-left.
+    let lens_r = height * 0.30;
+    let lens_c = egui::pos2(rect.left() + height * 0.40, rect.top() + height * 0.40);
+    // The handle starts on the lens rim toward the bottom-right.
+    let handle_dir = std::f32::consts::SQRT_2 / 2.0;
+    let handle_start = egui::pos2(
+        lens_c.x + lens_r * handle_dir,
+        lens_c.y + lens_r * handle_dir,
+    );
+    let handle_end = egui::pos2(rect.right() - height * 0.10, rect.bottom() - height * 0.10);
+
+    p.circle_stroke(lens_c, lens_r, egui::Stroke::new(height * 0.10, color));
+    p.line_segment(
+        [handle_start, handle_end],
+        egui::Stroke::new(height * 0.10, color),
+    );
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.apply_pending_jobs();
@@ -1503,24 +1530,13 @@ impl App {
             );
         }
 
-        // Filters, search and status line.
+        // Top bar: search (with a material magnifier) + rescan/refresh.
         ui.horizontal(|ui| {
-            for filter in [
-                VersionFilter::All,
-                VersionFilter::Mojang,
-                VersionFilter::Loaders,
-                VersionFilter::Release,
-                VersionFilter::Snapshot,
-                VersionFilter::Old,
-                VersionFilter::Installed,
-            ] {
-                ui.selectable_value(&mut self.version_filter, filter, filter.label());
-            }
-            ui.separator();
+            draw_search_icon(ui, 16.0, ui.visuals().text_color());
             ui.add(
                 egui::TextEdit::singleline(&mut self.version_search)
                     .hint_text("Search…")
-                    .desired_width(160.0),
+                    .desired_width(200.0),
             );
             if ui.button("Rescan").clicked() {
                 self.reload_versions();
@@ -1601,6 +1617,30 @@ impl App {
             if shown.is_empty() {
                 ui.weak("No versions match the current filter.");
             }
+
+            // The Filters section lives below the list, as its own
+            // collapsible tab-like section (like Mod loaders above).
+            ui.add_space(6.0);
+            ui.separator();
+            let header = egui::CollapsingHeader::new("Filters")
+                .id_salt("versions_filters")
+                .default_open(self.filters_open)
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for filter in [
+                            VersionFilter::All,
+                            VersionFilter::Mojang,
+                            VersionFilter::Loaders,
+                            VersionFilter::Release,
+                            VersionFilter::Snapshot,
+                            VersionFilter::Old,
+                            VersionFilter::Installed,
+                        ] {
+                            ui.selectable_value(&mut self.version_filter, filter, filter.label());
+                        }
+                    });
+                });
+            self.filters_open = header.openness > 0.0;
         });
     }
 
