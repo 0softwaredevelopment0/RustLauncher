@@ -919,10 +919,10 @@ fn toast_body(
     expand_progress: f32,
     full_log: Option<&str>,
 ) -> (bool, bool, egui::Vec2) {
-    let mut close_clicked = false;
-    let mut body_clicked = false;
+    // The ✕ zone's rect, recorded while drawing the header row.
+    let cross_rect = std::cell::Cell::new(egui::Rect::NOTHING);
 
-    let size = egui::Frame::popup(ui.style())
+    let frame_rect = egui::Frame::popup(ui.style())
         .fill(match kind {
             ToastKind::Error => egui::Color32::from_rgb(0x3B, 0x2E, 0x2A), // warm dark red-brown
             ToastKind::Info => ui.style().visuals.widgets.inactive.bg_fill,
@@ -937,9 +937,9 @@ fn toast_body(
             ui.set_min_width(320.0);
             ui.set_max_width(360.0);
 
-            // The ✕ close zone first, as part of the header row. It is an
-            // interactable widget with its own ID; egui gives it priority
-            // over the later whole-card interact for clicks inside it.
+            // The ✕ close zone, as part of the header row. Its clickable
+            // response is registered *after* the card-wide body interact
+            // (see the tail of this function) so it wins clicks inside it.
             ui.horizontal(|ui| {
                 match kind {
                     ToastKind::Error => draw_warning_triangle(ui, 24.0),
@@ -959,13 +959,14 @@ fn toast_body(
                     }
                 });
 
-                let (close_rect, close_resp) =
-                    ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
-                ui.painter_at(close_rect)
-                    .add(draw_material_cross(close_rect, close_resp.hovered()));
-                if close_resp.clicked() {
-                    close_clicked = true;
-                }
+                // Reserve the ✕ space without a click sense here: the ✕
+                // click is registered after the body interact below, and
+                // egui routes a click to the last registered interact
+                // containing the pointer — that is what makes the ✕ win
+                // inside its corner.
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                cross_rect.set(rect);
             });
 
             // The expanding log section (error toasts with a log). The
@@ -1009,22 +1010,56 @@ fn toast_body(
             }
         })
         .response
-        .rect
-        .size();
+        .rect;
 
-    // Left-click anywhere on the card body (the ✕ has its own interact ID
-    // registered earlier in this pass, and egui routes the click to the
-    // widget under the pointer — the guard also keeps a ✕ click from
-    // double-firing).
-    let interact = ui.interact(
-        ui.min_rect(),
+    // Hit-testing order matters: egui routes a click to the *last*
+    // registered interact containing the pointer, so the card body goes
+    // first and the ✕ corner second — that is what makes the ✕ clickable
+    // at all (a cross registered before the body never receives clicks).
+    let body = ui.interact(
+        frame_rect,
         egui::Id::new(("toast_body", index)),
         egui::Sense::click(),
     );
-    if interact.clicked() && !close_clicked {
-        body_clicked = true;
+    let cross_area = cross_rect.get();
+    let cross = ui.interact(
+        cross_area,
+        egui::Id::new(("toast_close", index)),
+        egui::Sense::click(),
+    );
+
+    // Paint the ✕ here so its hover highlight tracks the live pointer.
+    ui.painter_at(cross_area)
+        .add(draw_material_cross(cross_area, cross.hovered()));
+
+    // Countdown bar along the bottom edge: drains from full to empty over
+    // the hold time and disappears once the toast is locked by a click.
+    let frac = toast.hold_frac();
+    if frac > 0.0 {
+        let track = egui::Rect::from_min_max(
+            egui::pos2(frame_rect.left() + 2.0, frame_rect.bottom() - 4.0),
+            egui::pos2(frame_rect.right() - 2.0, frame_rect.bottom() - 1.0),
+        );
+        let p = ui.painter_at(frame_rect);
+        p.rect_filled(track, 1.0, egui::Color32::from_black_alpha(80));
+        let accent = match kind {
+            ToastKind::Error => egui::Color32::from_rgb(0xFF, 0xC1, 0x07), // amber 500
+            ToastKind::Info => egui::Color32::from_rgb(0x21, 0x96, 0xF3),  // blue 500
+        };
+        let fill = egui::Rect::from_min_max(
+            track.min,
+            egui::pos2(track.left() + track.width() * frac, track.max.y),
+        );
+        p.rect_filled(fill, 1.0, accent);
     }
-    (close_clicked, body_clicked, size)
+
+    let close_clicked = cross.clicked();
+    let body_clicked = body.clicked()
+        && !close_clicked
+        && body
+            .interact_pointer_pos()
+            .is_none_or(|pos| !cross_area.contains(pos));
+    (close_clicked, body_clicked, frame_rect.size())
 }
 
 /// A material-style ✕ cross shape for the given square rect.

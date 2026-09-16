@@ -180,6 +180,16 @@ impl Toast {
         }
     }
 
+    /// Progress fraction of the countdown bar: 1.0 right after appearing,
+    /// draining to 0.0 over the hold time, then gone. Pinned toasts report
+    /// 0.0 so the bar disappears once a click locks the toast.
+    pub fn hold_frac(&self) -> f32 {
+        if self.pinned {
+            return 0.0;
+        }
+        ((TOAST_HOLD_SECS - self.age) / TOAST_HOLD_SECS).clamp(0.0, 1.0)
+    }
+
     /// The height measured during the last render (0 = not rendered yet).
     #[cfg(test)]
     #[allow(dead_code)]
