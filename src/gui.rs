@@ -22,7 +22,7 @@ use crate::news::{self, NewsItem};
 use crate::notifications::{Toast, ToastKind, Toasts};
 use crate::profiles;
 use crate::servers::{self, ServerStore};
-use crate::settings::Settings;
+use crate::settings::{self, Settings};
 use crate::skins;
 use crate::updater::{self, Manifest};
 use crate::version::{self, Version};
@@ -881,6 +881,35 @@ impl App {
             jobs.lock().unwrap_or_else(|e| e.into_inner()).push(job);
             ctx.request_repaint();
         });
+    }
+
+    /// Ask for a destination and write the whole console buffer there.
+    fn export_console(&mut self) {
+        let default_name = format!(
+            "console-{}.log",
+            chrono::Local::now().format("%Y%m%d_%H%M%S")
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("Log files", &["log", "txt"])
+            .save_file()
+        else {
+            return; // user cancelled
+        };
+        let text = {
+            let buf = self.console.lock().unwrap_or_else(|e| e.into_inner());
+            buf.join("\n")
+        };
+        match std::fs::write(&path, text) {
+            Ok(()) => {
+                let msg = format!("Console exported to {}", path.display());
+                self.log_console(msg.clone());
+                self.notify_info(msg);
+            }
+            Err(e) => {
+                self.notify_error("EXPORT", format!("console export failed: {e:#}"));
+            }
+        }
     }
 
     fn save_settings(&self) {
@@ -2083,6 +2112,22 @@ impl App {
     fn ui_console(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Console");
+            // How much of the game output to display.
+            egui::ComboBox::from_id_salt("console_mode")
+                .selected_text(self.settings.console_log_mode.label())
+                .width(150.0)
+                .show_ui(ui, |ui| {
+                    for mode in settings::ConsoleMode::ALL {
+                        ui.selectable_value(
+                            &mut self.settings.console_log_mode,
+                            mode,
+                            mode.label(),
+                        );
+                    }
+                });
+            if ui.button("Export to file…").clicked() {
+                self.export_console();
+            }
             if ui.button("Clear").clicked() {
                 self.console
                     .lock()
@@ -2100,12 +2145,19 @@ impl App {
         });
         ui.separator();
 
-        let lines: Vec<String> = {
+        let all_lines: Vec<String> = {
             let buf = self.console.lock().unwrap_or_else(|e| e.into_inner());
             buf.clone()
         };
-        let changed = lines.len() != self.console_seq;
-        self.console_seq = lines.len();
+        let changed = all_lines.len() != self.console_seq;
+        self.console_seq = all_lines.len();
+
+        // Apply the log mode: launcher's own lines always pass, game output
+        // is filtered by the selected mode.
+        let lines: Vec<&String> = all_lines
+            .iter()
+            .filter(|l| self.settings.console_log_mode.allows_launcher_aware(l))
+            .collect();
 
         egui::ScrollArea::vertical()
             .stick_to_bottom(changed)
@@ -2121,7 +2173,7 @@ impl App {
                                 .text_styles
                                 .insert(egui::TextStyle::Body, egui::FontId::monospace(12.0));
                             for line in &lines {
-                                ui.label(line);
+                                ui.label(line.as_str());
                                 ui.end_row();
                             }
                         });
@@ -4138,7 +4190,10 @@ impl App {
                 &mut self.settings.save_console_log,
                 "Save game console to logs/",
             );
-            ui.checkbox(&mut self.settings.all_logs, "Verbose console");
+            ui.strong("Console log mode");
+            for mode in settings::ConsoleMode::ALL {
+                ui.radio_value(&mut self.settings.console_log_mode, mode, mode.label());
+            }
             ui.checkbox(&mut self.settings.dark_theme, "Dark theme");
         });
         ui.separator();

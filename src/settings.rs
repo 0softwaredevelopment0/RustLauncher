@@ -11,6 +11,75 @@ use serde::{Deserialize, Serialize};
 use crate::home;
 use crate::jvm;
 
+/// How much of the game output the Console tab displays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ConsoleMode {
+    /// Every line.
+    #[default]
+    All,
+    /// Only errors (errors, exceptions, crashes).
+    Errors,
+    /// Errors plus warnings.
+    ErrorsAndWarnings,
+    /// No game output at all (launcher messages still show).
+    Nothing,
+}
+
+impl ConsoleMode {
+    pub const ALL: [ConsoleMode; 4] = [
+        ConsoleMode::All,
+        ConsoleMode::Errors,
+        ConsoleMode::ErrorsAndWarnings,
+        ConsoleMode::Nothing,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ConsoleMode::All => "All",
+            ConsoleMode::Errors => "Errors",
+            ConsoleMode::ErrorsAndWarnings => "Errors + warnings",
+            ConsoleMode::Nothing => "Nothing",
+        }
+    }
+
+    /// Whether a line should be shown: the launcher's own `[RustLauncher]`
+    /// lines always pass, game output is filtered by the mode.
+    pub fn allows_launcher_aware(&self, line: &str) -> bool {
+        if line.starts_with("[RustLauncher]") || line.starts_with("[ERROR ") {
+            return true;
+        }
+        self.allows(line)
+    }
+
+    /// Whether a game-output line should be shown under this mode.
+    pub fn allows(&self, line: &str) -> bool {
+        match self {
+            ConsoleMode::All => true,
+            ConsoleMode::Nothing => false,
+            ConsoleMode::Errors => line_matches(line, ERROR_MARKERS),
+            ConsoleMode::ErrorsAndWarnings => {
+                line_matches(line, ERROR_MARKERS) || line_matches(line, WARNING_MARKERS)
+            }
+        }
+    }
+}
+
+const ERROR_MARKERS: &[&str] = &[
+    "error",
+    "exception",
+    "failed",
+    "fatal",
+    "crash",
+    "severe",
+    "stack trace",
+];
+const WARNING_MARKERS: &[&str] = &["warn"];
+
+fn line_matches(line: &str, markers: &[&str]) -> bool {
+    let lower = line.to_ascii_lowercase();
+    markers.iter().any(|m| lower.contains(m))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -36,8 +105,8 @@ pub struct Settings {
     pub auto_connect: bool,
     /// Write the game console output to a numbered log file.
     pub save_console_log: bool,
-    /// Console shows every log line instead of errors only.
-    pub all_logs: bool,
+    /// How much of the game output the Console tab shows.
+    pub console_log_mode: ConsoleMode,
     pub dark_theme: bool,
     /// Ask for confirmation before force-killing the game (Kill button).
     pub confirm_kill: bool,
@@ -60,7 +129,7 @@ impl Default for Settings {
             connect_server_ip: String::new(),
             auto_connect: false,
             save_console_log: true,
-            all_logs: false,
+            console_log_mode: ConsoleMode::All,
             dark_theme: true,
             confirm_kill: true,
             confirm_stop: true,
@@ -149,14 +218,32 @@ mod tests {
         let dir = tmp_home("extra");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // `ram` was removed from the struct; old configs must still load.
+        // `ram` and `all_logs` were removed from the struct; old configs must
+        // still load.
         std::fs::write(
             dir.join("config.json"),
-            br#"{"ram": 2048, "someRemovedSetting": true}"#,
+            br#"{"ram": 2048, "all_logs": true, "someRemovedSetting": true}"#,
         )
         .unwrap();
         let s = Settings::load(&dir);
         assert_eq!(s.java_args, jvm::DEFAULT_JVM_ARGS);
+        assert_eq!(s.console_log_mode, ConsoleMode::All);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn console_mode_filters_lines() {
+        let err = "java.lang.RuntimeException: boom";
+        let warn = "[12:00] WARN: low disk space";
+        let plain = "Rendering world chunk 42";
+        assert!(ConsoleMode::All.allows(err));
+        assert!(ConsoleMode::All.allows(plain));
+        assert!(ConsoleMode::Errors.allows(err));
+        assert!(!ConsoleMode::Errors.allows(warn));
+        assert!(!ConsoleMode::Errors.allows(plain));
+        assert!(ConsoleMode::ErrorsAndWarnings.allows(err));
+        assert!(ConsoleMode::ErrorsAndWarnings.allows(warn));
+        assert!(!ConsoleMode::ErrorsAndWarnings.allows(plain));
+        assert!(!ConsoleMode::Nothing.allows(err));
     }
 }
