@@ -15,6 +15,7 @@ use crate::auth::AccountKind;
 use crate::content;
 use crate::diagnostics;
 use crate::home::{self};
+use crate::icons;
 use crate::launcher::{self, LaunchPlan};
 use crate::logs::SessionLog;
 use crate::news::{self, NewsItem};
@@ -767,6 +768,7 @@ pub fn merge_versions(local: &[Version], manifest: Option<&Manifest>) -> Vec<Ver
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = cc.egui_ctx.clone();
+        icons::install(&ctx);
         let home_dir = home::launcher_home().unwrap_or_else(|_| std::env::temp_dir());
         let _ = home::ensure(&home_dir);
         let settings = Settings::load(&home_dir);
@@ -1915,16 +1917,22 @@ impl eframe::App for App {
             ui.heading("RustLauncher");
             ui.add_space(8.0);
             for (screen, label) in [
-                (Screen::General, "▶  General"),
-                (Screen::Console, "▤  Console"),
-                (Screen::Versions, "☰  Versions"),
-                (Screen::Servers, "⛶  Servers"),
-                (Screen::Accounts, "◉  Accounts"),
-                (Screen::Skins, "☺  Skins"),
-                (Screen::Modrinth, "⬢  Modrinth"),
-                (Screen::News, "✉  News"),
-                (Screen::Settings, "⚙  Settings"),
-                (Screen::Diagnostics, "✚  Diagnostics"),
+                (Screen::General, format!("{}  General", icons::PLAY_ARROW)),
+                (Screen::Console, format!("{}  Console", icons::TERMINAL)),
+                (Screen::Versions, format!("{}  Versions", icons::LAYERS)),
+                (Screen::Servers, format!("{}  Servers", icons::DNS)),
+                (
+                    Screen::Accounts,
+                    format!("{}  Accounts", icons::ACCOUNT_CIRCLE),
+                ),
+                (Screen::Skins, format!("{}  Skins", icons::FACE)),
+                (Screen::Modrinth, format!("{}  Modrinth", icons::EXTENSION)),
+                (Screen::News, format!("{}  News", icons::ARTICLE)),
+                (Screen::Settings, format!("{}  Settings", icons::SETTINGS)),
+                (
+                    Screen::Diagnostics,
+                    format!("{}  Diagnostics", icons::BUILD),
+                ),
             ] {
                 let selected = self.screen == screen;
                 if ui.selectable_label(selected, label).clicked() {
@@ -2017,7 +2025,10 @@ impl App {
         ui.horizontal(|ui| {
             let play_enabled = !self.game_running.load(Ordering::SeqCst);
             if ui
-                .add_enabled(play_enabled, egui::Button::new("▶  Play"))
+                .add_enabled(
+                    play_enabled,
+                    egui::Button::new(format!("{}  Play", icons::PLAY_ARROW)),
+                )
                 .clicked()
             {
                 self.start_game();
@@ -3633,7 +3644,7 @@ impl App {
                 ui.set_min_width(ui.available_width());
                 // Top bar: back arrow + title + author + stats.
                 ui.horizontal(|ui| {
-                    let back = ui.button("← Back");
+                    let back = ui.button(format!("{} Back", icons::ARROW_BACK));
                     if back.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         self.tab(platform).open_project = None;
                     }

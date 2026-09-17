@@ -16,6 +16,7 @@ mod db;
 mod diagnostics;
 mod gui;
 mod home;
+mod icons;
 mod java_locator;
 mod jvm;
 mod launcher;
