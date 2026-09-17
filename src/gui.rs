@@ -1242,12 +1242,16 @@ impl App {
         // lives on App so it survives across frames while open (it is
         // reset when the dialog opens, see the Stop/Kill click handlers).
         let kill_confirmed = kind == TerminateKind::Kill;
-        egui::Area::new(egui::Id::new("terminate_confirm_dialog"))
-            .order(egui::Order::Foreground)
+        egui::Window::new(egui::RichText::new("Confirm").strong())
+            .id(egui::Id::new("terminate_confirm_dialog"))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .constrain(false)
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            .default_width(420.0)
+            .min_width(360.0)
             .show(ctx, |ui| {
-                egui::Frame::window(ui.style()).show(ui, |ui| {
+                egui::Frame::none().show(ui, |ui| {
                     ui.set_max_width(420.0);
                     ui.horizontal(|ui| {
                         draw_warning_triangle(ui, 36.0);
@@ -2894,12 +2898,16 @@ impl App {
                 }
             });
 
-        egui::Area::new(egui::Id::new("account_remove_dialog"))
-            .order(egui::Order::Foreground)
+        egui::Window::new(egui::RichText::new("Confirm removal").strong())
+            .id(egui::Id::new("account_remove_dialog"))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .constrain(false)
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            .default_width(420.0)
+            .min_width(360.0)
             .show(ctx, |ui| {
-                egui::Frame::window(ui.style()).show(ui, |ui| {
+                egui::Frame::none().show(ui, |ui| {
                     // Cap the dialog so a long nickname cannot stretch it to
                     // the whole screen; the text itself truncates.
                     ui.set_max_width(420.0);
@@ -2935,12 +2943,24 @@ impl App {
                     let confirmed = match kind {
                         Some(AccountKind::Offline) => {
                             ui.horizontal(|ui| {
-                                ui.label("Password");
+                                ui.label("Password:");
                                 let resp = ui.add(
                                     egui::TextEdit::singleline(&mut self.account_remove_password)
                                         .password(true)
-                                        .desired_width(180.0),
+                                        .hint_text("type the account password")
+                                        .desired_width(240.0)
+                                        .id(egui::Id::new("account_remove_password")),
                                 );
+                                // Auto-focus the password field while nothing else
+                                // in the dialog holds focus, so it is obvious where
+                                // to type right after the dialog opens.
+                                if ui.memory(|m| m.focused().is_none()) {
+                                    ui.memory_mut(|m| {
+                                        m.request_focus(egui::Id::new(
+                                            "account_remove_password",
+                                        ))
+                                    });
+                                }
                                 let enter =
                                     resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                                 enter
