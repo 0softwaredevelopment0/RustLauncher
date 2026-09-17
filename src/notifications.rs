@@ -42,6 +42,7 @@ pub struct Toast {
     pub kind: ToastKind,
     pub title: String,
     /// Optional error code / short tag shown after the title.
+    #[allow(dead_code)] // kept for API completeness; the header shows it inline
     pub code: Option<String>,
     /// Optional multi-line detail (for errors: the last log lines).
     pub detail: Option<String>,

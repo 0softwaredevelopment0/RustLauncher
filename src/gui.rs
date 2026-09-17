@@ -1477,6 +1477,10 @@ fn toast_body(
         .show(ui, |ui| {
             ui.set_min_width(320.0);
             ui.set_max_width(360.0);
+            // Padding inside the frame; used to compute the real text width.
+            let inner_pad = 16.0;
+            // Width available for text between the icon column and the ✕.
+            let text_width = 360.0_f32 - inner_pad - 26.0 - 24.0;
 
             // The ✕ close zone, as part of the header row. Its clickable
             // response is registered *after* the card-wide body interact
@@ -1488,15 +1492,29 @@ fn toast_body(
                 }
                 ui.add_space(2.0);
                 ui.vertical(|ui| {
-                    ui.set_min_width(240.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(&toast.title).strong());
-                        if let Some(code) = &toast.code {
-                            ui.label(egui::RichText::new(format!("[{code}]")).weak().monospace());
-                        }
-                    });
+                    // Hard-wrap the title into at most 2 lines with an
+                    // ellipsis on the overflow — a very long single-line
+                    // error message must never widen the card.
+                    ui.set_min_width(text_width);
+                    ui.set_max_width(text_width);
+                    let title_lines = collapse_detail(&toast.title, 2);
+                    for line in &title_lines {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(line).strong())
+                                .wrap_mode(egui::TextWrapMode::Truncate),
+                        );
+                    }
                     if let Some(detail) = &toast.detail {
-                        ui.label(egui::RichText::new(detail).monospace().small().weak());
+                        let mono = egui::FontId::monospace(10.0);
+                        for line in collapse_detail(detail, 3) {
+                            let shown = ellipsize_line(ui, &line, text_width, &mono);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(shown).monospace().small().weak(),
+                                )
+                                .wrap_mode(egui::TextWrapMode::Truncate),
+                            );
+                        }
                     }
                 });
 
@@ -1524,10 +1542,11 @@ fn toast_body(
                     );
                     let painter = ui.painter_at(log_rect);
                     painter.rect_filled(log_rect, 2.0, egui::Color32::from_black_alpha(90));
-                    let galley = ui.painter().layout_no_wrap(
+                    let galley = ui.painter().layout(
                         log.to_string(),
                         egui::FontId::monospace(10.0),
                         egui::Color32::from_rgb(0xC8, 0xC8, 0xC8),
+                        (log_rect.width() - 8.0).max(40.0),
                     );
                     // Keep the last log line pinned to the bottom of the
                     // section while it grows.
@@ -1601,6 +1620,85 @@ fn toast_body(
             .interact_pointer_pos()
             .is_none_or(|pos| !cross_area.contains(pos));
     (close_clicked, body_clicked, frame_rect.size())
+}
+
+/// Collapse a multi-line detail to at most `max_lines`: everything past
+/// the cap is replaced by a single "…" line, so the collapsed toast stays
+/// a fixed size no matter how long the message is.
+fn collapse_detail(detail: &str, max_lines: usize) -> Vec<String> {
+    let lines: Vec<&str> = detail.lines().collect();
+    if lines.len() <= max_lines {
+        return lines.iter().map(|s| s.to_string()).collect();
+    }
+    let mut out: Vec<String> = lines[..max_lines.saturating_sub(1)]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    out.push("…".to_string());
+    out
+}
+
+/// Trim one line so it fits `max_width` in the given font, appending "…".
+fn ellipsize_line(ui: &egui::Ui, line: &str, max_width: f32, font: &egui::FontId) -> String {
+    let color = ui.visuals().text_color();
+    if ui
+        .painter()
+        .layout_no_wrap(line.to_string(), font.clone(), color)
+        .size()
+        .x
+        <= max_width
+    {
+        return line.to_string();
+    }
+    // Binary search the longest prefix that fits, then append the ellipsis.
+    let bytes = line.as_bytes();
+    let mut lo = 0usize;
+    let mut hi = bytes.len();
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if !line.is_char_boundary(mid) {
+            hi = mid - 1;
+            continue;
+        }
+        let w = ui
+            .painter()
+            .layout_no_wrap(line[..mid].to_string(), font.clone(), color)
+            .size()
+            .x;
+        if w <= max_width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut end = lo;
+    while end > 0 && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    // Make room for the ellipsis itself.
+    let ell = "…";
+    let ell_w = ui
+        .painter()
+        .layout_no_wrap(ell.to_string(), font.clone(), color)
+        .size()
+        .x;
+    while end > 0 {
+        let cand = &line[..end];
+        let w = ui
+            .painter()
+            .layout_no_wrap(format!("{cand}{ell}"), font.clone(), color)
+            .size()
+            .x;
+        if w <= max_width {
+            return format!("{cand}{ell}");
+        }
+        end -= 1;
+        while end > 0 && !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        let _ = ell_w;
+    }
+    ell.to_string()
 }
 
 /// A material-style ✕ cross shape for the given square rect.
@@ -3798,6 +3896,19 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collapse_detail_caps_lines_with_ellipsis() {
+        // Within the cap: unchanged.
+        let short = "line1\nline2\nline3";
+        assert_eq!(collapse_detail(short, 3), vec!["line1", "line2", "line3"]);
+        // Past the cap: the overflow becomes a single "…" line.
+        let long = "a\nb\nc\nd\ne";
+        assert_eq!(collapse_detail(long, 3), vec!["a", "b", "…"]);
+        // A single very long line stays one line (truncation is visual).
+        let one_long = "x".repeat(500);
+        assert_eq!(collapse_detail(&one_long, 3), vec![one_long]);
+    }
 
     fn local_version(name: &str) -> Version {
         Version {
