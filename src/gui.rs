@@ -3487,7 +3487,6 @@ impl App {
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for item in items {
-                let open = state.open_project.as_deref() == Some(item.id.as_str());
                 // Icon: fetch asynchronously through the shared cache; shows
                 // a placeholder square while downloading (48px).
                 let mut icon_tex = None;
@@ -3579,27 +3578,95 @@ impl App {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                 });
-                // Toggle button under the card opens the full page too.
-                ui.horizontal(|ui| {
-                    let label = if open {
-                        "\u{25b2} close page"
-                    } else {
-                        "\u{25bc} open page & versions"
-                    };
-                    if ui.small_button(label).clicked() {
-                        let tab = self.tab(platform);
-                        tab.open_project = if open { None } else { Some(item.id.clone()) };
-                    }
-                });
-                if open {
-                    ui.indent(("proj", item.id.as_str()), |ui| {
-                        // The full project page (filters, sorted versions...).
-                        self.content_project_page(ui, platform, item, &state, installing);
-                    });
-                }
                 ui.separator();
             }
         });
+
+        // The open project renders as a full-screen overlay (like a site
+        // page) above everything, with a back arrow in the top-left corner.
+        if let Some(open_id) = state.open_project.clone() {
+            if let Some(item) = items.iter().find(|i| i.id == open_id) {
+                let ctx = self.ctx.clone();
+                self.content_project_overlay(&ctx, platform, item, &state, installing);
+            } else {
+                self.tab(platform).open_project = None;
+            }
+        }
+    }
+
+    /// Full-screen project page overlay: dim + page panel on the top layer
+    /// with a back arrow, so a click on a card opens the page like a site.
+    fn content_project_overlay(
+        &mut self,
+        ctx: &egui::Context,
+        platform: ContentPlatform,
+        item: &content::ContentItem,
+        state: &ContentSnapshot,
+        installing: bool,
+    ) {
+        // Dim behind the overlay. Foreground sits above all panels.
+        egui::Area::new(egui::Id::new("content_page_dim"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(ctx.screen_rect().left_top())
+            .show(ctx, |ui| {
+                let screen = ctx.screen_rect();
+                let resp = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
+                if resp.clicked() {
+                    self.tab(platform).open_project = None;
+                }
+            });
+
+        // The page itself: above the dim, nearly full-screen with margins,
+        // its own scroll. The back arrow (← Back) sits in the top bar.
+        // Order::Foreground keeps the page ABOVE the dim area below it.
+        egui::Window::new(" ")
+            .id(egui::Id::new("content_page"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .fixed_size(ctx.screen_rect().size() - egui::vec2(48.0, 48.0))
+            .resizable(false)
+            .collapsible(false)
+            .title_bar(false)
+            .show(ctx, |ui| {
+                ui.set_min_width(ui.available_width());
+                // Top bar: back arrow + title + author + stats.
+                ui.horizontal(|ui| {
+                    let back = ui.button("← Back");
+                    if back.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.tab(platform).open_project = None;
+                    }
+                    // Icon + title block.
+                    let icon_url = item.icon_url.clone();
+                    let icon_rect = ui
+                        .allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover())
+                        .0;
+                    match self.icon_cache.get(&icon_url) {
+                        Some(tex) => {
+                            egui::Image::new(tex)
+                                .fit_to_exact_size(egui::vec2(56.0, 56.0))
+                                .paint_at(ui, icon_rect);
+                        }
+                        None => {
+                            ui.painter()
+                                .rect_filled(icon_rect, 6.0, ui.visuals().faint_bg_color);
+                        }
+                    }
+                    ui.vertical(|ui| {
+                        ui.heading(&item.title);
+                        ui.weak(format!(
+                            "by {} · ↓ {} · ♥ {} · [{}]",
+                            item.author, item.downloads, item.follows, item.license
+                        ));
+                    });
+                });
+                ui.separator();
+
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.content_project_page(ui, platform, item, state, installing);
+                });
+            });
     }
 
     /// The full project page opened on left click: description, version
