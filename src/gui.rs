@@ -2613,7 +2613,9 @@ impl App {
                             self.spawn_job(
                                 move || {
                                     // Argon2id hashing is intentionally slow;
-                                    // keep it off the UI thread.
+                                    // keep it off the UI thread. The insert goes
+                                    // through the DB so any store can do it; the
+                                    // live in-memory store is refreshed afterwards.
                                     let mut store = AccountStore::load(&LauncherPaths::probe());
                                     store.add_offline(&name, &password)
                                 },
@@ -2749,24 +2751,17 @@ impl App {
                                         match result {
                                             Ok(Some(login)) => {
                                                 app.ms_login = None;
-                                                app.account_busy = true;
-                                                app.spawn_job(
-                                                    move || {
-                                                        let mut store = AccountStore::load(
-                                                            &LauncherPaths::probe(),
-                                                        );
-                                                        store.add_mojang(
-                                                            &login.username,
-                                                            &login.uuid,
-                                                            &login.access_token,
-                                                            &login.refresh_token,
-                                                        )
-                                                    },
-                                                    move |app, result| {
-                                                        app.account_busy = false;
-                                                        app.finish_account_change(result);
-                                                    },
+                                                app.ms_polling = false;
+                                                // Add to the live store directly: the
+                                                // HTTP work is done, the insert is a
+                                                // fast local SQLite write.
+                                                let result = app.accounts.add_mojang(
+                                                    &login.username,
+                                                    &login.uuid,
+                                                    &login.access_token,
+                                                    &login.refresh_token,
                                                 );
+                                                app.finish_account_change(result);
                                             }
                                             Ok(None) => {} // still waiting; poll again next frames
                                             Err(e) => {
@@ -2832,6 +2827,11 @@ impl App {
                 self.username_input.clear();
                 self.new_account_password.clear();
                 self.account_error = None;
+                // Background jobs add the account to a throwaway store loaded
+                // from the DB; reload the in-memory copy so the new account
+                // actually shows up in the list and can be selected.
+                self.accounts = AccountStore::load(&self.home_dir);
+                self.accounts.select(&name);
                 self.save_accounts();
                 self.notify_info(format!("Account {name} added"));
             }
@@ -2840,17 +2840,21 @@ impl App {
     }
 
     /// Store an online login result (Ely.by or Microsoft) as an account.
+    /// Runs on the UI thread: the HTTP work already happened in the job; the
+    /// store write is a fast local SQLite insert.
     fn finish_online_login(&mut self, result: Result<auth::Account>) {
         match result {
             Ok(account) => {
                 self.online_password_input.clear();
-                let store = AccountStore::load(&LauncherPaths::probe());
-                let mut store = store;
+                // Mutate the live store directly so the new account is in the
+                // list immediately (and persisted by the store itself).
                 let result = match account.kind {
-                    AccountKind::ElyBy => {
-                        store.add_elyby(&account.username, &account.uuid, &account.access_token)
-                    }
-                    AccountKind::Mojang => store.add_mojang(
+                    AccountKind::ElyBy => self.accounts.add_elyby(
+                        &account.username,
+                        &account.uuid,
+                        &account.access_token,
+                    ),
+                    AccountKind::Mojang => self.accounts.add_mojang(
                         &account.username,
                         &account.uuid,
                         &account.access_token,
@@ -3098,6 +3102,8 @@ impl App {
     /// remaining account when the removed one was selected.
     fn remove_account_confirmed(&mut self, name: &str) {
         let _ = self.accounts.remove(name);
+        // Re-sync with the DB so the in-memory list matches what is stored.
+        self.accounts = AccountStore::load(&self.home_dir);
         self.account_remove_pending = None;
         self.account_remove_password.clear();
         self.account_remove_login.clear();
