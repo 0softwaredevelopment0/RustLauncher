@@ -1248,47 +1248,45 @@ impl App {
             .collapsible(false)
             .resizable(false)
             .title_bar(false)
-            .default_width(420.0)
-            .min_width(360.0)
+            // Hard clamp: min = max = default, so the dialog physically
+            // cannot stretch regardless of what egui remembers or measures.
+            .fixed_size(egui::vec2(400.0, 190.0))
             .show(ctx, |ui| {
-                egui::Frame::none().show(ui, |ui| {
-                    ui.set_max_width(420.0);
-                    ui.horizontal(|ui| {
-                        draw_warning_triangle(ui, 36.0);
-                        ui.add_space(6.0);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(title).strong().size(16.0));
-                            ui.label(body);
-                        });
+                ui.horizontal(|ui| {
+                    draw_warning_triangle(ui, 36.0);
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(title).strong().size(16.0));
+                        ui.label(body);
                     });
+                });
 
-                    ui.add_space(10.0);
-                    ui.checkbox(&mut self.terminate_dont_ask, "Don't ask again");
+                ui.add_space(10.0);
+                ui.checkbox(&mut self.terminate_dont_ask, "Don't ask again");
 
-                    ui.add_space(10.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
-                            .clicked()
-                        {
-                            self.terminate_confirm = None;
-                            if self.terminate_dont_ask {
-                                match kind {
-                                    TerminateKind::Stop => self.settings.confirm_stop = false,
-                                    TerminateKind::Kill => self.settings.confirm_kill = false,
-                                }
-                                self.save_settings();
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                        .clicked()
+                    {
+                        self.terminate_confirm = None;
+                        if self.terminate_dont_ask {
+                            match kind {
+                                TerminateKind::Stop => self.settings.confirm_stop = false,
+                                TerminateKind::Kill => self.settings.confirm_kill = false,
                             }
-                            if kill_confirmed {
-                                self.kill_game();
-                            } else {
-                                self.stop_game();
-                            }
+                            self.save_settings();
                         }
-                        if ui.button("Cancel").clicked() {
-                            self.terminate_confirm = None;
+                        if kill_confirmed {
+                            self.kill_game();
+                        } else {
+                            self.stop_game();
                         }
-                    });
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.terminate_confirm = None;
+                    }
                 });
             });
     }
@@ -2904,189 +2902,184 @@ impl App {
             .collapsible(false)
             .resizable(false)
             .title_bar(false)
-            .default_width(420.0)
-            .min_width(360.0)
+            // Hard clamp: min = max = default, so the dialog physically
+            // cannot stretch regardless of what egui remembers or measures.
+            .fixed_size(egui::vec2(400.0, 230.0))
             .show(ctx, |ui| {
-                egui::Frame::none().show(ui, |ui| {
-                    // Cap the dialog so a long nickname cannot stretch it to
-                    // the whole screen; the text itself truncates.
-                    ui.set_max_width(420.0);
-                    ui.set_min_width(360.0);
-                    ui.horizontal(|ui| {
-                        draw_warning_triangle(ui, 36.0);
-                        ui.add_space(6.0);
-                        ui.vertical(|ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!("Remove {name}?"))
-                                        .strong()
-                                        .size(16.0),
-                                )
-                                .wrap_mode(egui::TextWrapMode::Truncate),
-                            );
-                            match kind {
-                                Some(AccountKind::Offline) => {
-                                    ui.label("Enter the account password to confirm removal.");
-                                }
-                                Some(AccountKind::ElyBy) => {
-                                    ui.label("Sign in to Ely.by again to confirm removal.");
-                                }
-                                Some(AccountKind::Mojang) => {
-                                    ui.label("Sign in with Microsoft again to confirm removal.");
-                                }
-                                None => {}
+                ui.horizontal(|ui| {
+                    draw_warning_triangle(ui, 36.0);
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("Remove {name}?"))
+                                    .strong()
+                                    .size(16.0),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Truncate),
+                        );
+                        match kind {
+                            Some(AccountKind::Offline) => {
+                                ui.label("Enter the account password to confirm removal.");
                             }
-                        });
-                    });
-                    ui.add_space(10.0);
-
-                    let confirmed = match kind {
-                        Some(AccountKind::Offline) => {
-                            ui.horizontal(|ui| {
-                                ui.label("Password:");
-                                let resp = ui.add(
-                                    egui::TextEdit::singleline(&mut self.account_remove_password)
-                                        .password(true)
-                                        .hint_text("type the account password")
-                                        .desired_width(240.0)
-                                        .id(egui::Id::new("account_remove_password")),
-                                );
-                                // Auto-focus the password field while nothing else
-                                // in the dialog holds focus, so it is obvious where
-                                // to type right after the dialog opens.
-                                if ui.memory(|m| m.focused().is_none()) {
-                                    ui.memory_mut(|m| {
-                                        m.request_focus(egui::Id::new(
-                                            "account_remove_password",
-                                        ))
-                                    });
-                                }
-                                let enter =
-                                    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                enter
-                                    && self
-                                        .accounts
-                                        .verify_offline_password(&name, self.account_remove_password.trim())
-                            });
-                            if let Some(err) = &self.account_remove_error {
-                                ui.colored_label(egui::Color32::LIGHT_RED, err);
+                            Some(AccountKind::ElyBy) => {
+                                ui.label("Sign in to Ely.by again to confirm removal.");
                             }
-                            let ok = !self.account_remove_password.trim().is_empty()
-                                && self
-                                    .accounts
-                                    .verify_offline_password(&name, self.account_remove_password.trim());
-                            let mut clicked = false;
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                clicked = ui
-                                    .add_enabled(
-                                        ok,
-                                        egui::Button::new(egui::RichText::new("Confirm").strong()),
-                                    )
-                                    .clicked();
-                            });
-                            ok && clicked
-                        }
-                        Some(AccountKind::ElyBy) => {
-                            ui.horizontal(|ui| {
-                                ui.label("Ely.by login");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.account_remove_login)
-                                        .desired_width(180.0),
-                                );
-                                ui.label("Password");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.account_remove_password)
-                                        .password(true)
-                                        .desired_width(140.0),
-                                );
-                            });
-                            if let Some(err) = &self.account_remove_error {
-                                ui.colored_label(egui::Color32::LIGHT_RED, err);
+                            Some(AccountKind::Mojang) => {
+                                ui.label("Sign in with Microsoft again to confirm removal.");
                             }
-                            let ready = !self.account_remove_login.trim().is_empty()
-                                && !self.account_remove_password.is_empty();
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui
-                                    .add_enabled(
-                                        ready,
-                                        egui::Button::new(egui::RichText::new("Confirm").strong()),
-                                    )
-                                    .clicked()
-                                {
-                                    self.account_remove_error = None;
-                                    let user = self.account_remove_login.trim().to_string();
-                                    let password = self.account_remove_password.clone();
-                                    let name = name.clone();
-                                    self.spawn_job(
-                                        move || auth::login_elyby(&user, &password),
-                                        move |app, res| match res {
-                                            Ok(acc) => {
-                                                if acc.username == name {
-                                                    app.remove_account_confirmed(&name);
-                                                } else {
-                                                    app.account_remove_error = Some(
-                                                        "that login belongs to another account".into(),
-                                                    );
-                                                }
-                                            }
-                                            Err(e) => app.account_remove_error = Some(e.to_string()),
-                                        },
-                                    );
-                                }
-                            });
-                            false
-                        }
-                        Some(AccountKind::Mojang) => {
-                            ui.label("A Microsoft sign-in window will open. Complete it to remove this account.");
-                            if ui.button("Start Microsoft sign-in").clicked() {
-                                let name = name.clone();
-                                self.account_busy = true;
-                                self.spawn_job(
-                                    move || {
-                                        auth::microsoft_begin(&crate::net::agent())
-                                            .map_err(|e| e.to_string())
-                                    },
-                                    move |app, result| match result {
-                                        Ok((device_code, user_code, _, _)) => {
-                                            app.account_busy = false;
-                                            app.account_remove_pending = Some(name.clone());
-                                            app.ms_removal = Some(MsLoginState {
-                                                device_code,
-                                                user_code: user_code.clone(),
-                                                error: None,
-                                                cancelled: false,
-                                            });
-                                            app.notify_info(format!(
-                                                "Enter the code {user_code} at microsoft.com/link"
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            app.account_busy = false;
-                                            app.account_remove_error = Some(e);
-                                        }
-                                    },
-                                );
-                            }
-                            if let Some(err) = &self.account_remove_error {
-                                ui.colored_label(egui::Color32::LIGHT_RED, err);
-                            }
-                            false
-                        }
-                        None => false,
-                    };
-                    if confirmed {
-                        self.remove_account_confirmed(&name);
-                    }
-
-                    ui.add_space(10.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel").clicked() {
-                            self.account_remove_pending = None;
-                            self.ms_removal = None;
+                            None => {}
                         }
                     });
                 });
-            });
+                ui.add_space(10.0);
+
+                let confirmed = match kind {
+                    Some(AccountKind::Offline) => {
+                        ui.horizontal(|ui| {
+                            ui.label("Password:");
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(&mut self.account_remove_password)
+                                    .password(true)
+                                    .hint_text("type the account password")
+                                    .desired_width(240.0)
+                                    .id(egui::Id::new("account_remove_password")),
+                            );
+                            // Auto-focus the password field while nothing else
+                            // in the dialog holds focus, so it is obvious where
+                            // to type right after the dialog opens.
+                            if ui.memory(|m| m.focused().is_none()) {
+                                ui.memory_mut(|m| {
+                                    m.request_focus(egui::Id::new("account_remove_password"))
+                                });
+                            }
+                            let enter =
+                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            enter
+                                && self
+                                    .accounts
+                                    .verify_offline_password(&name, self.account_remove_password.trim())
+                        });
+                if let Some(err) = &self.account_remove_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
+                let ok = !self.account_remove_password.trim().is_empty()
+                    && self
+                        .accounts
+                        .verify_offline_password(&name, self.account_remove_password.trim());
+                let mut clicked = false;
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    clicked = ui
+                        .add_enabled(
+                            ok,
+                            egui::Button::new(egui::RichText::new("Confirm").strong()),
+                        )
+                        .clicked();
+                });
+                ok && clicked
+            }
+            Some(AccountKind::ElyBy) => {
+                ui.horizontal(|ui| {
+                    ui.label("Ely.by login:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.account_remove_login)
+                            .desired_width(220.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Password:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.account_remove_password)
+                            .password(true)
+                            .desired_width(220.0),
+                    );
+                });
+                if let Some(err) = &self.account_remove_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
+                let ready = !self.account_remove_login.trim().is_empty()
+                    && !self.account_remove_password.is_empty();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            ready,
+                            egui::Button::new(egui::RichText::new("Confirm").strong()),
+                        )
+                        .clicked()
+                    {
+                        self.account_remove_error = None;
+                        let user = self.account_remove_login.trim().to_string();
+                        let password = self.account_remove_password.clone();
+                        let name = name.clone();
+                        self.spawn_job(
+                            move || auth::login_elyby(&user, &password),
+                            move |app, res| match res {
+                                Ok(acc) => {
+                                    if acc.username == name {
+                                        app.remove_account_confirmed(&name);
+                                    } else {
+                                        app.account_remove_error = Some(
+                                            "that login belongs to another account".into(),
+                                        );
+                                    }
+                                }
+                                Err(e) => app.account_remove_error = Some(e.to_string()),
+                            },
+                        );
+                    }
+                });
+                false
+            }
+            Some(AccountKind::Mojang) => {
+                ui.label("A Microsoft sign-in window will open. Complete it to remove this account.");
+                if ui.button("Start Microsoft sign-in").clicked() {
+                    let name = name.clone();
+                    self.account_busy = true;
+                    self.spawn_job(
+                        move || {
+                            auth::microsoft_begin(&crate::net::agent())
+                                .map_err(|e| e.to_string())
+                        },
+                        move |app, result| match result {
+                            Ok((device_code, user_code, _, _)) => {
+                                app.account_busy = false;
+                                app.account_remove_pending = Some(name.clone());
+                                app.ms_removal = Some(MsLoginState {
+                                    device_code,
+                                    user_code: user_code.clone(),
+                                    error: None,
+                                    cancelled: false,
+                                });
+                                app.notify_info(format!(
+                                    "Enter the code {user_code} at microsoft.com/link"
+                                ));
+                            }
+                            Err(e) => {
+                                app.account_busy = false;
+                                app.account_remove_error = Some(e);
+                            }
+                        },
+                    );
+                }
+                if let Some(err) = &self.account_remove_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
+                false
+            }
+            None => false,
+        };
+        if confirmed {
+            self.remove_account_confirmed(&name);
+        }
+
+        ui.add_space(10.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Cancel").clicked() {
+                self.account_remove_pending = None;
+                self.ms_removal = None;
+            }
+        });
+    });
 
         // The Microsoft re-login for removal shares the device-code poller.
         if self.ms_removal.is_some() && !self.account_busy && !self.ms_polling {
