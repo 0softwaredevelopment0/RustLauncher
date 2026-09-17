@@ -128,6 +128,7 @@ pub struct ContentItem {
     #[allow(dead_code)]
     pub icon_url: String,
     /// Display categories (loaders + tags), lowercase.
+    #[allow(dead_code)] // shown in the collapsed description block
     pub categories: Vec<String>,
     /// License short name (`MIT`, `LicenseRef-All-Rights-Reserved`, …).
     #[allow(dead_code)] // displayed later in the project card
@@ -158,11 +159,16 @@ pub struct ProjectDetail {
     pub icon_url: String,
     #[allow(dead_code)]
     pub categories: Vec<String>,
+    #[allow(dead_code)] // page metadata shown in the summary line
     pub game_versions: Vec<String>,
+    #[allow(dead_code)]
     pub date_updated: String,
     /// Issue tracker / source links.
+    #[allow(dead_code)] // links page removed; kept for future use
     pub issues_url: String,
+    #[allow(dead_code)]
     pub source_url: String,
+    #[allow(dead_code)]
     pub wiki_url: String,
 }
 
@@ -183,6 +189,14 @@ pub struct ContentFile {
     /// Modrinth where loaders are a separate field).
     #[allow(dead_code)]
     pub loaders: Vec<String>,
+    /// Modrinth version type: `release`, `beta` or `alpha`.
+    pub version_type: String,
+    /// ISO-8601 publish date (empty when the platform lacks it).
+    pub date_published: String,
+    /// Author of the version, when the API provides one.
+    pub author: String,
+    /// Raw version number (`19.36.1`), distinct from the display name.
+    pub version_number: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +279,13 @@ struct ModrinthVersion {
     loaders: Vec<String>,
     #[serde(default)]
     files: Vec<ModrinthFile>,
+    /// `release`, `beta` or `alpha`.
+    #[serde(default)]
+    version_type: String,
+    #[serde(default)]
+    date_published: String,
+    #[serde(default)]
+    author: ModrinthUser,
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,6 +297,14 @@ struct ModrinthFile {
     size: u64,
     #[serde(default)]
     primary: bool,
+}
+
+/// Modrinth embeds the version author either as an object (when `?user=`
+/// is requested) or omits it; both parse to an empty username.
+#[derive(Debug, Default, Deserialize)]
+struct ModrinthUser {
+    #[serde(default)]
+    username: String,
 }
 /// Search Modrinth for content.
 #[allow(clippy::too_many_arguments)]
@@ -398,7 +427,7 @@ pub fn modrinth_versions(
                 None => (String::new(), String::new(), 0),
             };
             let name = if v.name.is_empty() {
-                v.version_number
+                v.version_number.clone()
             } else {
                 v.name
             };
@@ -409,6 +438,10 @@ pub fn modrinth_versions(
                 size,
                 game_versions: v.game_versions,
                 loaders: v.loaders,
+                version_type: v.version_type,
+                date_published: v.date_published,
+                author: v.author.username,
+                version_number: v.version_number,
             }
         })
         .filter(|f| !f.url.is_empty())
@@ -417,6 +450,173 @@ pub fn modrinth_versions(
 
 // Download
 // ---------------------------------------------------------------------------
+
+/// The badge letter and RGB color for a Modrinth `version_type`:
+/// release = green R, beta = yellow B, alpha = red A.
+pub fn version_badge(version_type: &str) -> (&'static str, [u8; 3]) {
+    match version_type {
+        "release" => ("R", [0, 128, 0]),
+        "beta" => ("B", [204, 160, 0]),
+        "alpha" => ("A", [204, 0, 0]),
+        _ => ("?", [128, 128, 128]),
+    }
+}
+
+/// Numeric-aware comparison of two version numbers: split into digit and
+/// non-digit segments, compare numerically where both sides are digits
+/// (`1.21.10 > 1.21.9`). Returns true when `a` orders before (is newer than)
+/// `b` under this scheme.
+pub fn version_number_gt(a: &str, b: &str) -> bool {
+    fn segments(v: &str) -> Vec<String> {
+        v.split(['.', '-', '+', ' '])
+            .flat_map(|s| {
+                // Split "21beta" into ["21", "beta"] pairs of digits/letters.
+                let mut out: Vec<String> = Vec::new();
+                let mut cur = String::new();
+                let mut cur_digit: Option<bool> = None;
+                for c in s.chars() {
+                    let d = c.is_ascii_digit();
+                    if cur_digit.is_some_and(|prev| prev != d) && !cur.is_empty() {
+                        out.push(cur.clone());
+                        cur.clear();
+                    }
+                    cur_digit = Some(d);
+                    cur.push(c);
+                }
+                if !cur.is_empty() {
+                    out.push(cur);
+                }
+                out
+            })
+            .collect()
+    }
+    let (sa, sb) = (segments(a), segments(b));
+    for i in 0..sa.len().max(sb.len()) {
+        let pa = sa.get(i);
+        let pb = sb.get(i);
+        match (pa, pb) {
+            (Some(x), Some(y)) => {
+                let (na, nb) = (x.parse::<u64>(), y.parse::<u64>());
+                let ord = match (na, nb) {
+                    (Ok(na), Ok(nb)) => na.cmp(&nb),
+                    _ => x.to_lowercase().cmp(&y.to_lowercase()),
+                };
+                if ord != std::cmp::Ordering::Equal {
+                    return ord == std::cmp::Ordering::Greater;
+                }
+            }
+            // The longer number is greater when the prefix matches.
+            (Some(_), None) => return true,
+            (None, Some(_)) => return false,
+            (None, None) => break,
+        }
+    }
+    false
+}
+
+/// ISO-8601 dates sort correctly as plain strings; longer is newer.
+#[cfg(test)]
+pub fn version_date_gt(a: &str, b: &str) -> bool {
+    a > b
+}
+
+/// Sort version files for the project page. `order` is one of the UI sort
+/// keys; `mc` is the current MC-version filter (used for grouping).
+pub fn sort_versions(files: &mut [ContentFile], order: VersionSort) {
+    match order {
+        VersionSort::Newest => {
+            files.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+        }
+        VersionSort::Oldest => {
+            files.sort_by(|a, b| a.date_published.cmp(&b.date_published));
+        }
+        VersionSort::NumberDesc => {
+            files.sort_by(|a, b| {
+                let num = version_number_gt(&b.version_number, &a.version_number);
+                let date = b.date_published.cmp(&a.date_published);
+                if num {
+                    std::cmp::Ordering::Less
+                } else {
+                    date
+                }
+            });
+        }
+        VersionSort::NumberAsc => {
+            files.sort_by(|a, b| {
+                let num = version_number_gt(&a.version_number, &b.version_number);
+                let date = a.date_published.cmp(&b.date_published);
+                if num {
+                    std::cmp::Ordering::Less
+                } else {
+                    date
+                }
+            });
+        }
+        VersionSort::NameAZ => {
+            files.sort_by_key(|f| f.name.to_lowercase());
+        }
+        VersionSort::NameZA => {
+            files.sort_by_key(|f| std::cmp::Reverse(f.name.to_lowercase()));
+        }
+    }
+}
+
+/// The sort orders offered on the project versions page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VersionSort {
+    #[default]
+    Newest,
+    Oldest,
+    NumberDesc,
+    NumberAsc,
+    NameAZ,
+    NameZA,
+}
+
+impl VersionSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            VersionSort::Newest => "Newest",
+            VersionSort::Oldest => "Oldest",
+            VersionSort::NumberDesc => "Number ↓",
+            VersionSort::NumberAsc => "Number ↑",
+            VersionSort::NameAZ => "A → Z",
+            VersionSort::NameZA => "Z → A",
+        }
+    }
+
+    /// All variants, in UI order.
+    pub const ALL: [VersionSort; 6] = [
+        VersionSort::Newest,
+        VersionSort::Oldest,
+        VersionSort::NumberDesc,
+        VersionSort::NumberAsc,
+        VersionSort::NameAZ,
+        VersionSort::NameZA,
+    ];
+}
+
+impl ContentFile {
+    /// The date part of `date_published` (`2024-12-01`), if present.
+    #[allow(dead_code)] // date shown via slicing; kept for API completeness
+    pub fn date_published_date(&self) -> &str {
+        &self.date_published[..10.min(self.date_published.len())]
+    }
+}
+
+/// Filter a version list to those supporting `mc` (empty = all) and the
+/// given version types (empty = all).
+pub fn filter_versions(files: Vec<ContentFile>, mc: &str, types: &[String]) -> Vec<ContentFile> {
+    let mc = mc.trim();
+    files
+        .into_iter()
+        .filter(|f| {
+            let mc_ok = mc.is_empty() || f.game_versions.iter().any(|v| v == mc);
+            let type_ok = types.is_empty() || types.iter().any(|t| t == &f.version_type);
+            mc_ok && type_ok
+        })
+        .collect()
+}
 
 /// Percent-encode the query-component characters that break URLs.
 fn urlquery(s: &str) -> String {
@@ -593,7 +793,8 @@ mod tests {
     fn modrinth_versions_parse_and_prefer_primary_file() {
         let body = r#"[
             {"name":"JEI 1.21.4","version_number":"19.21.4","game_versions":["1.21.4"],
-             "loaders":["fabric","quilt"],
+             "loaders":["fabric","quilt"],"version_type":"release",
+             "date_published":"2024-12-01T00:00:00Z","author":{"username":"mezz"},
              "files":[
                 {"url":"https://cdn/x.jar","filename":"secondary.jar","size":1,"primary":false},
                 {"url":"https://cdn/y.jar","filename":"primary.jar","size":2,"primary":true}
@@ -611,12 +812,38 @@ mod tests {
                     size: file.size,
                     game_versions: v.game_versions,
                     loaders: v.loaders,
+                    version_type: v.version_type,
+                    date_published: v.date_published,
+                    author: v.author.username,
+                    version_number: v.version_number,
                 }
             })
             .collect();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].file_name, "primary.jar");
         assert_eq!(files[0].loaders.len(), 2);
+        assert_eq!(files[0].version_type, "release");
+        assert_eq!(files[0].author, "mezz");
+        assert_eq!(files[0].version_number, "19.21.4");
+    }
+
+    #[test]
+    fn version_type_badge_letters() {
+        assert_eq!(version_badge("release"), ("R", [0, 128, 0]));
+        assert_eq!(version_badge("beta"), ("B", [204, 160, 0]));
+        assert_eq!(version_badge("alpha"), ("A", [204, 0, 0]));
+        assert_eq!(version_badge("weird"), ("?", [128, 128, 128]));
+        assert_eq!(version_badge(""), ("?", [128, 128, 128]));
+    }
+
+    #[test]
+    fn version_number_comparisons() {
+        // Numeric segments compare numerically, not lexically.
+        assert!(version_number_gt("1.21.10", "1.21.9"));
+        assert!(version_number_gt("19.36.1", "19.35.9"));
+        assert!(!version_number_gt("1.20.1", "1.21"));
+        // Equal numbers: the later publish date wins.
+        assert!(version_date_gt("2025-01-02", "2025-01-01"));
     }
 
     #[test]

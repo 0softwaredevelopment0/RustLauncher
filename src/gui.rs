@@ -43,12 +43,6 @@ enum ContentPlatform {
     Modrinth,
 }
 
-fn platform_slug(platform: ContentPlatform) -> &'static str {
-    match platform {
-        ContentPlatform::Modrinth => "modrinth",
-    }
-}
-
 /// Licenses commonly offered as a filter on Modrinth.
 const COMMON_LICENSES: &[&str] = &[
     "MIT",
@@ -301,9 +295,12 @@ struct ContentUi {
     files_loading: bool,
     /// The loaded project page (description body, links).
     detail: BTreeMap<String, Option<Result<content::ProjectDetail, String>>>,
-    /// Selected inner tab of the open project (0=Description, 1=Changelog,
-    /// 2=Versions).
-    detail_tab: usize,
+    /// Version sort on the project page.
+    version_sort: content::VersionSort,
+    /// MC-version filter on the project page (empty = any).
+    version_mc_filter: String,
+    /// Version-type filter on the project page (release/beta/alpha).
+    version_type_filter: Vec<String>,
 }
 
 impl ContentUi {
@@ -317,6 +314,14 @@ impl ContentUi {
 
     fn loader_slot(&mut self) -> &mut Option<updater::Loader> {
         &mut self.loader_filter
+    }
+
+    fn version_sort_slot(&mut self) -> &mut content::VersionSort {
+        &mut self.version_sort
+    }
+
+    fn version_mc_slot(&mut self) -> &mut String {
+        &mut self.version_mc_filter
     }
 
     /// An owned read-only snapshot of the render-relevant state; lets the
@@ -334,7 +339,6 @@ impl ContentUi {
             open_project: self.open_project.clone(),
             files: clone_files(&self.files),
             detail: clone_details(&self.detail),
-            detail_tab: self.detail_tab,
             files_loading: self.files_loading,
         }
     }
@@ -385,8 +389,53 @@ struct ContentSnapshot {
     open_project: Option<String>,
     files: BTreeMap<String, Option<Result<Vec<content::ContentFile>, String>>>,
     detail: BTreeMap<String, Option<Result<content::ProjectDetail, String>>>,
-    detail_tab: usize,
     files_loading: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Icon cache: async PNG downloads turned into egui textures.
+// ---------------------------------------------------------------------------
+
+/// Cache of project icons keyed by URL. A URL maps to `Loading` while the
+/// background fetch is in flight, then to the decoded texture or `Failed`.
+#[derive(Default)]
+pub struct IconCache {
+    entries: BTreeMap<String, IconState>,
+}
+
+enum IconState {
+    #[allow(dead_code)]
+    Loading,
+    Ready(egui::TextureHandle),
+    Failed,
+}
+
+impl IconCache {
+    /// Returns the cached texture for `url`, if it is decoded.
+    pub fn get(&self, url: &str) -> Option<&egui::TextureHandle> {
+        match self.entries.get(url) {
+            Some(IconState::Ready(tex)) => Some(tex),
+            _ => None,
+        }
+    }
+
+    /// Whether a fetch for this URL is done or already in flight.
+    fn known(&self, url: &str) -> bool {
+        self.entries.contains_key(url) || url.is_empty()
+    }
+
+    fn insert(&mut self, url: String, state: IconState) {
+        self.entries.insert(url, state);
+    }
+}
+
+/// Download and decode an icon into raw RGBA + dimensions.
+fn fetch_icon_rgba(url: &str) -> Result<(Vec<u8>, u32, u32)> {
+    let bytes = crate::net::get_bytes(&crate::net::agent(), url)?;
+    let img = image::load_from_memory(&bytes).context("failed to decode the icon image")?;
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    Ok((rgba.into_raw(), w, h))
 }
 
 pub struct App {
@@ -444,6 +493,8 @@ pub struct App {
     content_progress: Arc<Mutex<String>>,
     /// The MC version filter for content searches (empty = any).
     pub content_mc_filter: String,
+    /// Shared texture cache of project icons (keyed by icon URL).
+    icon_cache: IconCache,
 
     // Servers.
     pub server_status: BTreeMap<usize, String>,
@@ -757,6 +808,7 @@ impl App {
             loader_mc_pick: None,
             filters_open: true,
             modrinth: ContentUi::default(),
+            icon_cache: IconCache::default(),
             content_downloading: false,
             content_progress: Arc::new(Mutex::new(String::new())),
             content_mc_filter: String::new(),
@@ -3436,111 +3488,164 @@ impl App {
         egui::ScrollArea::vertical().show(ui, |ui| {
             for item in items {
                 let open = state.open_project.as_deref() == Some(item.id.as_str());
-                // Card header: icon + title + author + stats.
-                ui.horizontal(|ui| {
-                    let header = egui::CollapsingHeader::new(egui::RichText::new(format!(
-                        "{}   ·   ↓ {}  ·  ♥ {}  ·  [{}]",
-                        item.title, item.downloads, item.follows, item.license
-                    )))
-                    .id_salt((platform_slug(platform), item.id.as_str()))
-                    .default_open(open)
-                    .show(ui, |ui| {
-                        ui.weak(format!("by {}", item.author));
-                        ui.label(&item.description);
-                        if !item.categories.is_empty() {
-                            ui.weak(item.categories.join(" · "));
-                        }
-
-                        // The project detail tabs (Modrinth only: body page).
-                        if platform == ContentPlatform::Modrinth {
-                            self.content_detail_tabs(ui, platform, &item.id, &state);
-                        }
-
-                        // Versions + download buttons.
-                        ui.strong("Versions");
-                        if !state.files.contains_key(&item.id) && !state.files_loading {
-                            let id = item.id.clone();
-                            let id_task = item.id.clone();
-                            let mc = self.content_mc_filter.trim().to_string();
-                            let loader = self
-                                .tab(platform)
-                                .loader_filter
-                                .map(|l| l.slug().to_string());
-                            self.tab(platform).files_loading = true;
-                            self.spawn_job(
-                                move || {
-                                    content::modrinth_versions(
-                                        &crate::net::agent(),
-                                        &id_task,
-                                        &mc,
-                                        loader.as_deref(),
-                                    )
-                                    .map_err(|e| e.to_string())
-                                },
-                                move |app, result| {
-                                    let tab = app.tab(platform);
-                                    tab.files.insert(id, Some(result));
-                                    tab.files_loading = false;
-                                },
-                            );
-                        }
-                        match state.files.get(&item.id) {
-                            None => {
-                                ui.weak("Loading versions…");
-                            }
-                            Some(None) => {
-                                ui.weak("No versions for this MC version.");
-                            }
-                            Some(Some(Err(e))) => {
-                                ui.colored_label(egui::Color32::YELLOW, e.to_string());
-                            }
-                            Some(Some(Ok(files))) => {
-                                for file in files.iter().take(20) {
-                                    ui.horizontal(|ui| {
-                                        ui.monospace(&file.name);
-                                        ui.weak(format!(
-                                            "{:.1} MB",
-                                            file.size as f32 / 1_048_576.0
-                                        ));
-                                        let label = if installing { "…" } else { "Download" };
-                                        if ui
-                                            .add_enabled(!installing, egui::Button::new(label))
-                                            .clicked()
-                                        {
-                                            self.download_content(
-                                                state.kind,
-                                                item.clone(),
-                                                file.clone(),
-                                            );
-                                        }
-                                    });
+                // Icon: fetch asynchronously through the shared cache; shows
+                // a placeholder square while downloading (48px).
+                let mut icon_tex = None;
+                if !item.icon_url.is_empty() {
+                    if !self.icon_cache.known(&item.icon_url) {
+                        self.icon_cache
+                            .insert(item.icon_url.clone(), IconState::Loading);
+                        let url_task = item.icon_url.clone();
+                        let url_key = item.icon_url.clone();
+                        self.spawn_job(
+                            move || fetch_icon_rgba(&url_task).map_err(|e| e.to_string()),
+                            move |app, result| match result {
+                                Ok((rgba, w, h)) => {
+                                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                                        [w as usize, h as usize],
+                                        &rgba,
+                                    );
+                                    let tex = app.ctx.load_texture(
+                                        format!("icon:{}", url_key),
+                                        img,
+                                        egui::TextureOptions::LINEAR,
+                                    );
+                                    app.icon_cache.insert(url_key, IconState::Ready(tex));
                                 }
-                            }
+                                Err(_) => {
+                                    app.icon_cache.insert(url_key, IconState::Failed);
+                                }
+                            },
+                        );
+                    }
+                    icon_tex = self.icon_cache.get(&item.icon_url).cloned();
+                }
+
+                // Card: icon + title + author/stats; LMB opens the page.
+                ui.horizontal(|ui| {
+                    let (card_rect, card_resp) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 48.0),
+                        egui::Sense::click(),
+                    );
+                    let icon_rect = egui::Rect::from_min_size(
+                        card_rect.left_top() + egui::vec2(2.0, 2.0),
+                        egui::vec2(44.0, 44.0),
+                    );
+                    match &icon_tex {
+                        Some(tex) => {
+                            let img =
+                                egui::Image::new(tex).fit_to_exact_size(egui::vec2(44.0, 44.0));
+                            img.paint_at(ui, icon_rect);
                         }
-                    });
-                    if header.header_response.clicked() {
+                        None => {
+                            ui.painter()
+                                .rect_filled(icon_rect, 4.0, ui.visuals().faint_bg_color);
+                        }
+                    }
+                    let text_rect = egui::Rect::from_min_max(
+                        egui::pos2(icon_rect.right() + 8.0, card_rect.top() + 2.0),
+                        egui::pos2(card_rect.right() - 4.0, card_rect.bottom() - 2.0),
+                    );
+                    let galley_title = ui.painter().layout(
+                        item.title.clone(),
+                        egui::FontId::proportional(15.0),
+                        ui.visuals().text_color(),
+                        text_rect.width(),
+                    );
+                    ui.painter().galley(
+                        egui::pos2(text_rect.left(), text_rect.top()),
+                        galley_title,
+                        egui::Color32::TRANSPARENT,
+                    );
+                    let galley_sub = ui.painter().layout(
+                        format!(
+                            "by {} \u{b7} down {} \u{2665} {} [{}]",
+                            item.author, item.downloads, item.follows, item.license
+                        ),
+                        egui::FontId::proportional(11.0),
+                        ui.visuals().weak_text_color(),
+                        text_rect.width(),
+                    );
+                    ui.painter().galley(
+                        egui::pos2(text_rect.left(), text_rect.top() + 20.0),
+                        galley_sub,
+                        egui::Color32::TRANSPARENT,
+                    );
+                    if card_resp.clicked() {
+                        let tab = self.tab(platform);
+                        tab.open_project = Some(item.id.clone());
+                    }
+                    if card_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                });
+                // Toggle button under the card opens the full page too.
+                ui.horizontal(|ui| {
+                    let label = if open {
+                        "\u{25b2} close page"
+                    } else {
+                        "\u{25bc} open page & versions"
+                    };
+                    if ui.small_button(label).clicked() {
                         let tab = self.tab(platform);
                         tab.open_project = if open { None } else { Some(item.id.clone()) };
                     }
                 });
+                if open {
+                    ui.indent(("proj", item.id.as_str()), |ui| {
+                        // The full project page (filters, sorted versions...).
+                        self.content_project_page(ui, platform, item, &state, installing);
+                    });
+                }
                 ui.separator();
             }
         });
     }
 
-    /// The inner tabs of an open project: Description / Changelog (from the
-    /// latest version) / project page body.
-    fn content_detail_tabs(
+    /// The full project page opened on left click: description, version
+    /// list with sort orders (A-Z / Z-A / MC version / number), MC-version
+    /// and Release/Beta/Alpha filters and colored R/B/A badges.
+    fn content_project_page(
         &mut self,
         ui: &mut egui::Ui,
         platform: ContentPlatform,
-        project_id: &str,
+        item: &content::ContentItem,
         state: &ContentSnapshot,
+        installing: bool,
     ) {
-        // Lazily fetch the project page.
-        if !state.detail.contains_key(project_id) {
-            let id_task = project_id.to_string();
-            let id_key = project_id.to_string();
+        let project_id = item.id.clone();
+
+        // Fetch versions once.
+        if !state.files.contains_key(&project_id) && !state.files_loading {
+            let id_task = project_id.clone();
+            let mc = self.content_mc_filter.trim().to_string();
+            let loader = self
+                .tab(platform)
+                .loader_filter
+                .map(|l| l.slug().to_string());
+            self.tab(platform).files_loading = true;
+            let id_key = project_id.clone();
+            self.spawn_job(
+                move || {
+                    content::modrinth_versions(
+                        &crate::net::agent(),
+                        &id_task,
+                        &mc,
+                        loader.as_deref(),
+                    )
+                    .map_err(|e| e.to_string())
+                },
+                move |app, result| {
+                    let tab = app.tab(platform);
+                    tab.files.insert(id_key, Some(result));
+                    tab.files_loading = false;
+                },
+            );
+        }
+        // Fetch the page body lazily too.
+        if !state.detail.contains_key(&project_id) {
+            let id_task = project_id.clone();
+            let id_key = project_id.clone();
             self.spawn_job(
                 move || {
                     content::modrinth_project(&crate::net::agent(), &id_task)
@@ -3551,59 +3656,149 @@ impl App {
                 },
             );
         }
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            for (i, label) in ["Description", "Links"].iter().enumerate() {
-                if ui.selectable_label(state.detail_tab == i, *label).clicked() {
-                    self.tab(platform).detail_tab = i;
-                }
+
+        // Description body.
+        match state.detail.get(&project_id) {
+            Some(Some(Ok(detail))) => {
+                egui::ScrollArea::vertical()
+                    .max_height(160.0)
+                    .show(ui, |ui| {
+                        for line in detail.body.lines() {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                ui.add_space(2.0);
+                            } else if line.starts_with('#') {
+                                ui.strong(line.trim_start_matches('#').trim());
+                            } else {
+                                ui.label(strip_markdown(line));
+                            }
+                        }
+                    });
             }
-        });
-        match state.detail.get(project_id) {
+            _ => {
+                ui.weak(&item.description);
+            }
+        }
+
+        ui.add_space(4.0);
+        ui.strong("Versions");
+        let files_state = state.files.get(&project_id);
+        match files_state {
             None => {
-                ui.weak("Loading project page…");
+                ui.weak("Loading versions...");
             }
-            Some(None) => {}
+            Some(None) => {
+                ui.weak("No versions.");
+            }
             Some(Some(Err(e))) => {
                 ui.colored_label(egui::Color32::YELLOW, e.to_string());
             }
-            Some(Some(Ok(detail))) => match state.detail_tab {
-                1 => {
-                    ui.horizontal_wrapped(|ui| {
-                        if !detail.source_url.is_empty() {
-                            ui.hyperlink_to("Source", &detail.source_url);
-                        }
-                        if !detail.issues_url.is_empty() {
-                            ui.hyperlink_to("Issues", &detail.issues_url);
-                        }
-                        if !detail.wiki_url.is_empty() {
-                            ui.hyperlink_to("Wiki", &detail.wiki_url);
-                        }
-                    });
-                    ui.weak(format!(
-                        "Updated: {} · {} game versions",
-                        detail.date_updated,
-                        detail.game_versions.len()
-                    ));
-                }
-                _ => {
-                    // The markdown body, rendered as plain text paragraphs.
-                    egui::ScrollArea::vertical()
-                        .max_height(220.0)
-                        .show(ui, |ui| {
-                            for line in detail.body.lines() {
-                                let line = line.trim();
-                                if line.is_empty() {
-                                    ui.add_space(2.0);
-                                } else if line.starts_with("#") {
-                                    ui.strong(line.trim_start_matches('#').trim());
-                                } else {
-                                    ui.label(strip_markdown(line));
-                                }
+            Some(Some(Ok(files))) => {
+                // Sort + filter controls.
+                ui.horizontal_wrapped(|ui| {
+                    ui.weak("Sort:");
+                    egui::ComboBox::from_id_salt(("vsort", project_id.as_str()))
+                        .selected_text(self.tab(platform).version_sort.label())
+                        .width(100.0)
+                        .show_ui(ui, |ui| {
+                            for s in content::VersionSort::ALL {
+                                ui.selectable_value(
+                                    self.tab(platform).version_sort_slot(),
+                                    s,
+                                    s.label(),
+                                );
                             }
                         });
+                    ui.separator();
+                    ui.weak("MC:");
+                    ui.add(
+                        egui::TextEdit::singleline(self.tab(platform).version_mc_slot())
+                            .hint_text("any")
+                            .desired_width(110.0),
+                    );
+                    ui.separator();
+                    // Release/Beta/Alpha chips.
+                    for (label, value, color) in [
+                        ("Release", "release", egui::Color32::from_rgb(0, 200, 0)),
+                        ("Beta", "beta", egui::Color32::YELLOW),
+                        ("Alpha", "alpha", egui::Color32::LIGHT_RED),
+                    ] {
+                        let sel = self
+                            .tab(platform)
+                            .version_type_filter
+                            .iter()
+                            .any(|t| t == value);
+                        let text = egui::RichText::new(label).color(color);
+                        if ui.selectable_label(sel, text).clicked() {
+                            let tab = self.tab(platform);
+                            if sel {
+                                tab.version_type_filter.retain(|t| t != value);
+                            } else {
+                                tab.version_type_filter.push(value.to_string());
+                            }
+                        }
+                    }
+                });
+                ui.separator();
+
+                // Apply filter + sort to a local copy.
+                let mut shown = files.clone();
+                let mc_filter = self.tab(platform).version_mc_filter.trim().to_string();
+                let types = self.tab(platform).version_type_filter.clone();
+                shown = content::filter_versions(shown, &mc_filter, &types);
+                content::sort_versions(&mut shown, self.tab(platform).version_sort);
+                if shown.is_empty() {
+                    ui.weak("No versions match the filters.");
                 }
-            },
+                for file in shown.iter().take(50) {
+                    ui.horizontal(|ui| {
+                        // Colored badge: R green, B yellow, A red.
+                        let (letter, rgb) = content::version_badge(&file.version_type);
+                        let (badge, _badge_resp) =
+                            ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                        let color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                        let pf = ui.painter_at(badge);
+                        pf.rect_filled(badge, 4.0, color.gamma_multiply(0.25));
+                        pf.text(
+                            badge.center(),
+                            egui::Align2::CENTER_CENTER,
+                            letter,
+                            egui::FontId::proportional(13.0),
+                            color,
+                        );
+                        ui.vertical(|ui| {
+                            ui.monospace(&file.name);
+                            ui.horizontal(|ui| {
+                                if !file.author.is_empty() {
+                                    ui.weak(format!("by {}", file.author));
+                                }
+                                if let Some(mc) = file.game_versions.first() {
+                                    ui.weak(format!("MC {mc}"));
+                                }
+                                if !file.date_published.is_empty() {
+                                    ui.weak(
+                                        &file.date_published[..10.min(file.date_published.len())],
+                                    );
+                                }
+                                ui.weak(format!("{:.1} MB", file.size as f32 / 1_048_576.0));
+                            });
+                        });
+                        let label = if installing { "..." } else { "Download" };
+                        if ui
+                            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.add_enabled(!installing, egui::Button::new(label))
+                            })
+                            .inner
+                            .clicked()
+                        {
+                            self.download_content(state.kind, item.clone(), file.clone());
+                        }
+                    });
+                }
+                if shown.len() > 50 {
+                    ui.weak(format!("... {} more hidden", shown.len() - 50));
+                }
+            }
         }
     }
     fn tab(&mut self, platform: ContentPlatform) -> &mut ContentUi {
