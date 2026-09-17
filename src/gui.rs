@@ -1245,8 +1245,10 @@ impl App {
         egui::Area::new(egui::Id::new("terminate_confirm_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .constrain(false)
             .show(ctx, |ui| {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(420.0);
                     ui.horizontal(|ui| {
                         draw_warning_triangle(ui, 36.0);
                         ui.add_space(6.0);
@@ -2895,16 +2897,24 @@ impl App {
         egui::Area::new(egui::Id::new("account_remove_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .constrain(false)
             .show(ctx, |ui| {
                 egui::Frame::window(ui.style()).show(ui, |ui| {
+                    // Cap the dialog so a long nickname cannot stretch it to
+                    // the whole screen; the text itself truncates.
+                    ui.set_max_width(420.0);
+                    ui.set_min_width(360.0);
                     ui.horizontal(|ui| {
                         draw_warning_triangle(ui, 36.0);
                         ui.add_space(6.0);
                         ui.vertical(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!("Remove {name}?"))
-                                    .strong()
-                                    .size(16.0),
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("Remove {name}?"))
+                                        .strong()
+                                        .size(16.0),
+                                )
+                                .wrap_mode(egui::TextWrapMode::Truncate),
                             );
                             match kind {
                                 Some(AccountKind::Offline) => {
@@ -2929,7 +2939,7 @@ impl App {
                                 let resp = ui.add(
                                     egui::TextEdit::singleline(&mut self.account_remove_password)
                                         .password(true)
-                                        .desired_width(200.0),
+                                        .desired_width(180.0),
                                 );
                                 let enter =
                                     resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
