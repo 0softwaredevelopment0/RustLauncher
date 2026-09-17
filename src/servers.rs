@@ -7,7 +7,7 @@
 //! updated.
 
 use std::io::Write;
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -264,28 +264,44 @@ fn set_in_compound(root: &mut Value, key: &str, value: Value) {
 }
 
 /// TCP reachability probe for the Servers screen.
+///
+/// Hostnames are resolved via the system resolver (`ToSocketAddrs`) — a
+/// plain `SocketAddr::parse` only accepts literal IPs and fails on domains
+/// with "the requested address is not valid in its context".
 pub fn check_status(address: &str) -> ServerStatus {
     let (ip, port) = split_address(address);
     let Ok(port_num) = port.parse::<u16>() else {
         return ServerStatus::Offline("invalid port".into());
     };
-    let addr = format!("{ip}:{port_num}");
-    let timeout = Duration::from_secs(3);
-    match TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
-        timeout,
-    ) {
-        Ok(_) => ServerStatus::Online,
-        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-            ServerStatus::Offline("connection refused".into())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-            ServerStatus::Offline("timeout".into())
-        }
-        Err(e) => ServerStatus::Offline(e.to_string()),
+    let addrs = match (ip.as_str(), port_num).to_socket_addrs() {
+        Ok(addrs) => addrs.collect::<Vec<_>>(),
+        Err(e) => return ServerStatus::Offline(format!("cannot resolve {ip}: {e}")),
+    };
+    if addrs.is_empty() {
+        return ServerStatus::Offline(format!("cannot resolve {ip}"));
     }
+    let timeout = Duration::from_secs(3);
+    // Try every resolved address (a domain often has several A/AAAA records);
+    // remember the last error for the status line.
+    let mut last_err: Option<std::io::Error> = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(_) => return ServerStatus::Online,
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                // The host is reachable; nothing is listening on that port.
+                return ServerStatus::Offline("connection refused".into());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                return ServerStatus::Offline("timeout".into())
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    ServerStatus::Offline(
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unreachable".into()),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -309,6 +325,22 @@ mod tests {
 
     fn tmp(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("rl-srv-{}-{tag}", std::process::id()))
+    }
+
+    #[test]
+    fn check_status_resolves_domains() {
+        // A real domain with a running web server must resolve and connect
+        // (guards the regression where a hostname passed straight to
+        // SocketAddr::parse and always failed with "address not valid").
+        let status = check_status("example.com:80");
+        assert_eq!(status, ServerStatus::Online);
+        // A domain that does not exist must report a resolution failure,
+        // not a bogus "connected".
+        let status = check_status("no-such-host-rustlauncher.invalid:25565");
+        assert!(
+            matches!(status, ServerStatus::Offline(ref r) if r.contains("resolve")),
+            "unexpected status: {status}"
+        );
     }
 
     #[test]
