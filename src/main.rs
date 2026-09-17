@@ -12,6 +12,7 @@ mod auth;
 mod classpath;
 mod cli;
 mod content;
+mod db;
 mod diagnostics;
 mod gui;
 mod home;

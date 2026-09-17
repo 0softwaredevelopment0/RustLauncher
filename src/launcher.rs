@@ -214,7 +214,13 @@ pub fn build_launch_plan(
     args.push("--uuid".into());
     args.push(account.uuid.replace('-', ""));
     args.push("--accessToken".into());
-    args.push(account.uuid.clone());
+    // Online accounts pass their real session token; offline accounts use
+    // their UUID (the vanilla offline-mode convention).
+    args.push(if account.access_token.is_empty() {
+        account.uuid.clone()
+    } else {
+        account.access_token.clone()
+    });
     args.push("--version".into());
     args.push(version_name.to_string());
     args.push("--gameDir".into());

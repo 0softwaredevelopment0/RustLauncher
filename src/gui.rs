@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result};
 
 use crate::accounts::AccountStore;
 use crate::auth;
+use crate::auth::AccountKind;
 use crate::content;
 use crate::diagnostics;
 use crate::home::{self};
@@ -40,13 +41,11 @@ type LoaderBuildsCache =
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContentPlatform {
     Modrinth,
-    CurseForge,
 }
 
 fn platform_slug(platform: ContentPlatform) -> &'static str {
     match platform {
         ContentPlatform::Modrinth => "modrinth",
-        ContentPlatform::CurseForge => "curseforge",
     }
 }
 
@@ -439,9 +438,8 @@ pub struct App {
     #[allow(dead_code)] // kept for the planned restore of the collapsible section
     pub filters_open: bool,
 
-    // Mod-platform tabs (Modrinth / CurseForge), one shared state each.
+    // Mod-platform tab (Modrinth).
     modrinth: ContentUi,
-    curseforge: ContentUi,
     content_downloading: bool,
     content_progress: Arc<Mutex<String>>,
     /// The MC version filter for content searches (empty = any).
@@ -455,6 +453,26 @@ pub struct App {
 
     // Accounts.
     pub account_error: Option<String>,
+    /// Kind selected in the "Add account" section.
+    pub new_account_kind: AccountKind,
+    /// Offline-account creation password.
+    pub new_account_password: String,
+    /// Ely.by login inputs.
+    pub online_login_input: String,
+    pub online_password_input: String,
+    /// In-flight Microsoft device-code sign-in (account creation).
+    pub ms_login: Option<MsLoginState>,
+    /// In-flight Microsoft re-login (account removal proof).
+    pub ms_removal: Option<MsLoginState>,
+    /// A background auth/DB job is running (spinner on the Accounts screen).
+    pub account_busy: bool,
+    /// A Microsoft device-code poll job is in flight.
+    pub ms_polling: bool,
+    /// Account name awaiting removal confirmation.
+    pub account_remove_pending: Option<String>,
+    pub account_remove_password: String,
+    pub account_remove_login: String,
+    pub account_remove_error: Option<String>,
 
     // Skins.
     pub skin_names: Vec<String>,
@@ -494,6 +512,26 @@ enum TerminateKind {
     Kill,
 }
 
+/// State of an in-flight Microsoft device-code sign-in.
+#[derive(Debug, Clone)]
+pub(crate) struct MsLoginState {
+    device_code: String,
+    user_code: String,
+    error: Option<String>,
+    /// Set when the user pressed Cancel (consumed by the UI on the next frame).
+    cancelled: bool,
+}
+
+/// Launcher file locations for background jobs (the executable directory is
+/// portable; the DB lives next to the .exe).
+struct LauncherPaths;
+
+impl LauncherPaths {
+    fn probe() -> PathBuf {
+        crate::home::launcher_home().unwrap_or_else(|_| std::env::temp_dir())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     General,
@@ -503,7 +541,6 @@ pub enum Screen {
     Accounts,
     Skins,
     Modrinth,
-    CurseForge,
     News,
     Settings,
     Diagnostics,
@@ -720,7 +757,6 @@ impl App {
             loader_mc_pick: None,
             filters_open: true,
             modrinth: ContentUi::default(),
-            curseforge: ContentUi::default(),
             content_downloading: false,
             content_progress: Arc::new(Mutex::new(String::new())),
             content_mc_filter: String::new(),
@@ -729,6 +765,18 @@ impl App {
             new_server_addr: String::new(),
             servers_dat_status: String::new(),
             account_error: None,
+            new_account_kind: AccountKind::Offline,
+            new_account_password: String::new(),
+            online_login_input: String::new(),
+            online_password_input: String::new(),
+            ms_login: None,
+            ms_removal: None,
+            account_busy: false,
+            ms_polling: false,
+            account_remove_pending: None,
+            account_remove_password: String::new(),
+            account_remove_login: String::new(),
+            account_remove_error: None,
             skin_names: Vec::new(),
             selected_skin: None,
             skin_texture: None,
@@ -744,6 +792,7 @@ impl App {
             last_frame: None,
             launcher_log: None,
         };
+        app.accounts.select_saved(&app.settings.username);
         app.refresh_skins();
         app.select_saved_skin();
         app.fetch_news();
@@ -784,8 +833,15 @@ impl App {
         let _ = self.settings.save(&self.home_dir);
     }
 
-    fn save_accounts(&self) {
-        let _ = self.accounts.save(&home::accounts_file(&self.home_dir));
+    /// Persist the current account selection (the store itself writes to the
+    /// SQLite DB on every mutation; only the selected name lives in settings).
+    fn save_accounts(&mut self) {
+        self.settings.username = self
+            .accounts
+            .current()
+            .map(|a| a.username.clone())
+            .unwrap_or_default();
+        self.save_settings();
     }
 
     fn save_servers(&mut self) {
@@ -845,6 +901,13 @@ impl App {
         self.accounts.current().map(|rec| auth::Account {
             username: rec.username.clone(),
             uuid: rec.uuid.clone(),
+            access_token: if rec.access_token.is_empty() {
+                // Offline convention: the game accepts the UUID.
+                rec.uuid.clone()
+            } else {
+                rec.access_token.clone()
+            },
+            kind: rec.kind,
         })
     }
 
@@ -1705,7 +1768,6 @@ impl eframe::App for App {
                 (Screen::Accounts, "◉  Accounts"),
                 (Screen::Skins, "☺  Skins"),
                 (Screen::Modrinth, "⬢  Modrinth"),
-                (Screen::CurseForge, "☩  CurseForge"),
                 (Screen::News, "✉  News"),
                 (Screen::Settings, "⚙  Settings"),
                 (Screen::Diagnostics, "✚  Diagnostics"),
@@ -1731,6 +1793,10 @@ impl eframe::App for App {
 
         self.show_toasts(ctx);
 
+        if self.account_remove_pending.is_some() {
+            self.show_account_removal(ctx);
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| match self.screen {
             Screen::General => self.ui_general(ui),
             Screen::Console => self.ui_console(ui),
@@ -1739,7 +1805,6 @@ impl eframe::App for App {
             Screen::Accounts => self.ui_accounts(ui),
             Screen::Skins => self.ui_skins(ui, ctx),
             Screen::Modrinth => self.ui_content(ui, ContentPlatform::Modrinth),
-            Screen::CurseForge => self.ui_content(ui, ContentPlatform::CurseForge),
             Screen::News => self.ui_news(ui),
             Screen::Settings => self.ui_settings(ui),
             Screen::Diagnostics => self.ui_diagnostics(ui),
@@ -2403,67 +2468,544 @@ impl App {
         });
     }
 
+    /// The Accounts screen: three account kinds with their own creation and
+    /// removal proofs — Offline (nickname + password, Argon2id in the DB),
+    /// Ely.by (username + password against the Yggdrasil authserver) and
+    /// Mojang/Microsoft (OAuth device-code flow).
     fn ui_accounts(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Accounts (offline)");
+        ui.heading("Accounts");
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label("Nickname");
-            let response = ui.text_edit_singleline(&mut self.username_input);
-            if (ui.button("Add / select").clicked()
-                || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                && !self.username_input.trim().is_empty()
-            {
-                match self.accounts.add(self.username_input.trim()) {
-                    Ok(name) => {
-                        self.username_input = name;
-                        self.account_error = None;
-                        self.settings.username = self
-                            .accounts
-                            .current()
-                            .map(|a| a.username.clone())
-                            .unwrap_or_default();
-                        self.save_accounts();
-                        self.save_settings();
+
+        // ── Add account ──────────────────────────────────────────
+        ui.group(|ui| {
+            ui.strong("Add account");
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                for kind in auth::AccountKind::ALL {
+                    ui.selectable_value(&mut self.new_account_kind, *kind, kind.label());
+                }
+            });
+            match self.new_account_kind {
+                AccountKind::Offline => {
+                    ui.horizontal(|ui| {
+                        ui.label("Nickname");
+                        let name = ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.username_input)
+                                    .hint_text("3-16 chars")
+                                    .desired_width(140.0),
+                            )
+                            .lost_focus();
+                        ui.label("Password");
+                        let pass = ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.new_account_password)
+                                    .password(true)
+                                    .hint_text("required")
+                                    .desired_width(140.0),
+                            )
+                            .lost_focus();
+                        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if (ui.button("Create").clicked() || ((name || pass) && enter))
+                            && !self.account_busy
+                        {
+                            let name = self.username_input.trim().to_string();
+                            let password = self.new_account_password.clone();
+                            self.account_busy = true;
+                            self.spawn_job(
+                                move || {
+                                    // Argon2id hashing is intentionally slow;
+                                    // keep it off the UI thread.
+                                    let mut store = AccountStore::load(&LauncherPaths::probe());
+                                    store.add_offline(&name, &password)
+                                },
+                                move |app, result| {
+                                    app.account_busy = false;
+                                    app.finish_account_change(result);
+                                },
+                            );
+                        }
+                    });
+                    ui.weak(
+                        "The password is stored as an Argon2id hash in the launcher's database.",
+                    );
+                }
+                AccountKind::ElyBy => {
+                    ui.horizontal(|ui| {
+                        ui.label("Ely.by email / login");
+                        let user = ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.online_login_input)
+                                    .hint_text("you@example.com")
+                                    .desired_width(180.0),
+                            )
+                            .lost_focus();
+                        ui.label("Password");
+                        let pass = ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.online_password_input)
+                                    .password(true)
+                                    .desired_width(140.0),
+                            )
+                            .lost_focus();
+                        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if (ui.button("Log in").clicked() || ((user || pass) && enter))
+                            && !self.account_busy
+                        {
+                            let user = self.online_login_input.trim().to_string();
+                            let password = self.online_password_input.clone();
+                            self.account_busy = true;
+                            self.spawn_job(
+                                move || auth::login_elyby(&user, &password),
+                                move |app, result| {
+                                    app.account_busy = false;
+                                    app.finish_online_login(result);
+                                },
+                            );
+                        }
+                    });
+                    ui.weak(
+                        "Logs in against authserver.ely.by; the session token is stored in the DB.",
+                    );
+                }
+                AccountKind::Mojang => {
+                    ui.label("Sign in with a Microsoft account that owns Minecraft: Java Edition.");
+                    if self.ms_login.is_none()
+                        && !self.account_busy
+                        && ui.button("Start Microsoft sign-in").clicked()
+                    {
+                        self.account_busy = true;
+                        self.spawn_job(
+                            move || {
+                                auth::microsoft_begin(&crate::net::agent())
+                                    .map_err(|e| e.to_string())
+                            },
+                            move |app, result| match result {
+                                Ok((device_code, user_code, _expires, _interval)) => {
+                                    app.account_busy = false;
+                                    app.ms_login = Some(MsLoginState {
+                                        device_code,
+                                        user_code: user_code.clone(),
+                                        error: None,
+                                        cancelled: false,
+                                    });
+                                    app.notify_info(format!(
+                                        "Enter the code {user_code} at microsoft.com/link"
+                                    ));
+                                }
+                                Err(e) => {
+                                    app.account_busy = false;
+                                    app.notify_error("MS-BEGIN", e);
+                                }
+                            },
+                        );
                     }
-                    Err(e) => self.account_error = Some(e.to_string()),
+                    let ms_state = self.ms_login.take();
+                    if let Some(mut state) = ms_state {
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Go to");
+                                ui.hyperlink("https://www.microsoft.com/link");
+                                ui.add_space(8.0);
+                                ui.label("and enter code:");
+                                ui.label(
+                                    egui::RichText::new(&state.user_code)
+                                        .strong()
+                                        .monospace()
+                                        .size(18.0),
+                                );
+                                if ui.button("Copy").clicked() {
+                                    ui.ctx().copy_text(state.user_code.clone());
+                                }
+                            });
+                            ui.weak("Waiting for you to finish in the browser…");
+                            if let Some(err) = &state.error {
+                                ui.colored_label(egui::Color32::LIGHT_RED, err);
+                            }
+                            if ui.button("Cancel").clicked() {
+                                state.cancelled = true;
+                            }
+                        });
+
+                        if state.cancelled {
+                            self.ms_login = None;
+                        } else {
+                            // Put the state back; the poll job below updates it.
+                            self.ms_login = Some(state);
+
+                            // Poll in the background; the result arrives via a job.
+                            if !self.account_busy && !self.ms_polling {
+                                let device_code = self
+                                    .ms_login
+                                    .as_ref()
+                                    .map(|s| s.device_code.clone())
+                                    .unwrap_or_default();
+                                self.ms_polling = true;
+                                self.spawn_job(
+                                    move || {
+                                        auth::microsoft_poll(&crate::net::agent(), &device_code)
+                                            .map_err(|e| e.to_string())
+                                    },
+                                    move |app, result| {
+                                        app.ms_polling = false;
+                                        match result {
+                                            Ok(Some(login)) => {
+                                                app.ms_login = None;
+                                                app.account_busy = true;
+                                                app.spawn_job(
+                                                    move || {
+                                                        let mut store = AccountStore::load(
+                                                            &LauncherPaths::probe(),
+                                                        );
+                                                        store.add_mojang(
+                                                            &login.username,
+                                                            &login.uuid,
+                                                            &login.access_token,
+                                                            &login.refresh_token,
+                                                        )
+                                                    },
+                                                    move |app, result| {
+                                                        app.account_busy = false;
+                                                        app.finish_account_change(result);
+                                                    },
+                                                );
+                                            }
+                                            Ok(None) => {} // still waiting; poll again next frames
+                                            Err(e) => {
+                                                if let Some(state) = &mut app.ms_login {
+                                                    state.error = Some(e);
+                                                }
+                                            }
+                                        }
+                                    },
+                                );
+                            }
+                        }
+                    }
                 }
             }
+            if self.account_busy {
+                ui.spinner();
+                ui.weak("working…");
+            }
+            if let Some(error) = &self.account_error {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            }
         });
-        if let Some(error) = &self.account_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
-        }
-        ui.separator();
 
-        let names: Vec<String> = self
+        ui.add_space(6.0);
+
+        // ── Account list ─────────────────────────────────────────
+        ui.strong("Your accounts");
+        ui.add_space(2.0);
+        let rows: Vec<(AccountKind, String)> = self
             .accounts
             .accounts
             .iter()
-            .map(|a| a.username.clone())
+            .map(|a| (a.kind, a.username.clone()))
             .collect();
-        for name in &names {
+        for (kind, name) in &rows {
             ui.horizontal(|ui| {
                 let selected = self.accounts.current.as_deref() == Some(name.as_str());
                 if ui.radio(selected, name).clicked() {
                     self.accounts.select(name);
-                    self.settings.username = name.clone();
                     self.save_accounts();
-                    self.save_settings();
                 }
+                ui.weak(kind.label());
                 if ui.small_button("Remove").clicked() {
-                    self.accounts.remove(name);
-                    self.settings.username = self
-                        .accounts
-                        .current()
-                        .map(|a| a.username.clone())
-                        .unwrap_or_default();
-                    self.save_accounts();
-                    self.save_settings();
+                    // Removal always asks for proof: the password for offline
+                    // accounts, a fresh login for online ones.
+                    self.account_remove_pending = Some(name.clone());
+                    self.account_remove_password.clear();
+                    self.account_remove_error = None;
                 }
             });
         }
-        if names.is_empty() {
-            ui.weak("No accounts yet — type a nickname above (3–16 chars).");
+        if rows.is_empty() {
+            ui.weak("No accounts yet — create one above.");
         }
+    }
+
+    /// Common tail of every successful account mutation: refresh selection
+    /// state, clear inputs, drop the error.
+    fn finish_account_change(&mut self, result: Result<String>) {
+        match result {
+            Ok(name) => {
+                self.username_input.clear();
+                self.new_account_password.clear();
+                self.account_error = None;
+                self.save_accounts();
+                self.notify_info(format!("Account {name} added"));
+            }
+            Err(e) => self.account_error = Some(e.to_string()),
+        }
+    }
+
+    /// Store an online login result (Ely.by or Microsoft) as an account.
+    fn finish_online_login(&mut self, result: Result<auth::Account>) {
+        match result {
+            Ok(account) => {
+                self.online_password_input.clear();
+                let store = AccountStore::load(&LauncherPaths::probe());
+                let mut store = store;
+                let result = match account.kind {
+                    AccountKind::ElyBy => {
+                        store.add_elyby(&account.username, &account.uuid, &account.access_token)
+                    }
+                    AccountKind::Mojang => store.add_mojang(
+                        &account.username,
+                        &account.uuid,
+                        &account.access_token,
+                        "",
+                    ),
+                    AccountKind::Offline => unreachable!(),
+                };
+                self.finish_account_change(result);
+            }
+            Err(e) => {
+                self.account_error = Some(e.to_string());
+            }
+        }
+    }
+
+    /// The removal dialog: password proof for offline accounts, re-login for
+    /// online ones. Mirrors the Stop/Kill confirmation styling.
+    fn show_account_removal(&mut self, ctx: &egui::Context) {
+        let Some(name) = self.account_remove_pending.clone() else {
+            return;
+        };
+        let rec = self.accounts.accounts.iter().find(|a| a.username == name);
+        let kind = rec.map(|r| r.kind);
+        let screen = ctx.screen_rect();
+
+        egui::Area::new(egui::Id::new("account_remove_dim"))
+            .order(egui::Order::Middle)
+            .fixed_pos(screen.left_top())
+            .show(ctx, |ui| {
+                let resp = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
+                if resp.clicked() {
+                    self.account_remove_pending = None;
+                }
+            });
+
+        egui::Area::new(egui::Id::new("account_remove_dialog"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        draw_warning_triangle(ui, 36.0);
+                        ui.add_space(6.0);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("Remove {name}?"))
+                                    .strong()
+                                    .size(16.0),
+                            );
+                            match kind {
+                                Some(AccountKind::Offline) => {
+                                    ui.label("Enter the account password to confirm removal.");
+                                }
+                                Some(AccountKind::ElyBy) => {
+                                    ui.label("Sign in to Ely.by again to confirm removal.");
+                                }
+                                Some(AccountKind::Mojang) => {
+                                    ui.label("Sign in with Microsoft again to confirm removal.");
+                                }
+                                None => {}
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+
+                    let confirmed = match kind {
+                        Some(AccountKind::Offline) => {
+                            ui.horizontal(|ui| {
+                                ui.label("Password");
+                                let resp = ui.add(
+                                    egui::TextEdit::singleline(&mut self.account_remove_password)
+                                        .password(true)
+                                        .desired_width(200.0),
+                                );
+                                let enter =
+                                    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                enter
+                                    && self
+                                        .accounts
+                                        .verify_offline_password(&name, self.account_remove_password.trim())
+                            });
+                            if let Some(err) = &self.account_remove_error {
+                                ui.colored_label(egui::Color32::LIGHT_RED, err);
+                            }
+                            let ok = !self.account_remove_password.trim().is_empty()
+                                && self
+                                    .accounts
+                                    .verify_offline_password(&name, self.account_remove_password.trim());
+                            let mut clicked = false;
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                clicked = ui
+                                    .add_enabled(
+                                        ok,
+                                        egui::Button::new(egui::RichText::new("Confirm").strong()),
+                                    )
+                                    .clicked();
+                            });
+                            ok && clicked
+                        }
+                        Some(AccountKind::ElyBy) => {
+                            ui.horizontal(|ui| {
+                                ui.label("Ely.by login");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.account_remove_login)
+                                        .desired_width(180.0),
+                                );
+                                ui.label("Password");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.account_remove_password)
+                                        .password(true)
+                                        .desired_width(140.0),
+                                );
+                            });
+                            if let Some(err) = &self.account_remove_error {
+                                ui.colored_label(egui::Color32::LIGHT_RED, err);
+                            }
+                            let ready = !self.account_remove_login.trim().is_empty()
+                                && !self.account_remove_password.is_empty();
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .add_enabled(
+                                        ready,
+                                        egui::Button::new(egui::RichText::new("Confirm").strong()),
+                                    )
+                                    .clicked()
+                                {
+                                    self.account_remove_error = None;
+                                    let user = self.account_remove_login.trim().to_string();
+                                    let password = self.account_remove_password.clone();
+                                    let name = name.clone();
+                                    self.spawn_job(
+                                        move || auth::login_elyby(&user, &password),
+                                        move |app, res| match res {
+                                            Ok(acc) => {
+                                                if acc.username == name {
+                                                    app.remove_account_confirmed(&name);
+                                                } else {
+                                                    app.account_remove_error = Some(
+                                                        "that login belongs to another account".into(),
+                                                    );
+                                                }
+                                            }
+                                            Err(e) => app.account_remove_error = Some(e.to_string()),
+                                        },
+                                    );
+                                }
+                            });
+                            false
+                        }
+                        Some(AccountKind::Mojang) => {
+                            ui.label("A Microsoft sign-in window will open. Complete it to remove this account.");
+                            if ui.button("Start Microsoft sign-in").clicked() {
+                                let name = name.clone();
+                                self.account_busy = true;
+                                self.spawn_job(
+                                    move || {
+                                        auth::microsoft_begin(&crate::net::agent())
+                                            .map_err(|e| e.to_string())
+                                    },
+                                    move |app, result| match result {
+                                        Ok((device_code, user_code, _, _)) => {
+                                            app.account_busy = false;
+                                            app.account_remove_pending = Some(name.clone());
+                                            app.ms_removal = Some(MsLoginState {
+                                                device_code,
+                                                user_code: user_code.clone(),
+                                                error: None,
+                                                cancelled: false,
+                                            });
+                                            app.notify_info(format!(
+                                                "Enter the code {user_code} at microsoft.com/link"
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            app.account_busy = false;
+                                            app.account_remove_error = Some(e);
+                                        }
+                                    },
+                                );
+                            }
+                            if let Some(err) = &self.account_remove_error {
+                                ui.colored_label(egui::Color32::LIGHT_RED, err);
+                            }
+                            false
+                        }
+                        None => false,
+                    };
+                    if confirmed {
+                        self.remove_account_confirmed(&name);
+                    }
+
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Cancel").clicked() {
+                            self.account_remove_pending = None;
+                            self.ms_removal = None;
+                        }
+                    });
+                });
+            });
+
+        // The Microsoft re-login for removal shares the device-code poller.
+        if self.ms_removal.is_some() && !self.account_busy && !self.ms_polling {
+            let device_code = self
+                .ms_removal
+                .as_ref()
+                .map(|s| s.device_code.clone())
+                .unwrap_or_default();
+            let name = name.clone();
+            self.ms_polling = true;
+            self.spawn_job(
+                move || {
+                    auth::microsoft_poll(&crate::net::agent(), &device_code)
+                        .map_err(|e| e.to_string())
+                },
+                move |app, result| {
+                    app.ms_polling = false;
+                    match result {
+                        Ok(Some(login)) => {
+                            if login.username == name {
+                                app.ms_removal = None;
+                                app.remove_account_confirmed(&name);
+                            } else {
+                                if let Some(state) = &mut app.ms_removal {
+                                    state.error =
+                                        Some("that Microsoft account is not this account".into());
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            if let Some(state) = &mut app.ms_removal {
+                                state.error = Some(e);
+                            }
+                        }
+                    }
+                },
+            );
+        }
+    }
+
+    /// Remove the account (proof already collected). Falls back to the first
+    /// remaining account when the removed one was selected.
+    fn remove_account_confirmed(&mut self, name: &str) {
+        let _ = self.accounts.remove(name);
+        self.account_remove_pending = None;
+        self.account_remove_password.clear();
+        self.account_remove_login.clear();
+        self.account_remove_error = None;
+        self.save_accounts();
+        self.notify_info(format!("Account {name} removed"));
     }
 
     fn ui_skins(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -2563,25 +3105,11 @@ impl App {
         }
     }
 
-    /// The Modrinth/CurseForge tab: search content, pick a file, install it
-    /// into the game directory. Tab state is accessed via `self.tab(platform)`
-    /// to keep borrow conflicts out of the render closures.
+    /// The Modrinth tab: search content, pick a file, install it into the
+    /// game directory. Tab state is accessed via `self.tab(platform)` to keep
+    /// borrow conflicts out of the render closures.
     fn ui_content(&mut self, ui: &mut egui::Ui, platform: ContentPlatform) {
-        let api_key = match platform {
-            ContentPlatform::Modrinth => String::new(),
-            ContentPlatform::CurseForge => self.settings.curseforge_api_key.clone(),
-        };
-
-        ui.heading(match platform {
-            ContentPlatform::Modrinth => "Modrinth",
-            ContentPlatform::CurseForge => "CurseForge",
-        });
-        if platform == ContentPlatform::CurseForge && api_key.trim().is_empty() {
-            ui.colored_label(
-                egui::Color32::YELLOW,
-                "CurseForge needs an API key — set it in Settings (section CurseForge).",
-            );
-        }
+        ui.heading("Modrinth");
         ui.add_space(4.0);
 
         // Content kind tabs: mods are the default, the rest follow the
@@ -2660,10 +3188,9 @@ impl App {
             let license = self.tab(platform).license_filter.clone();
             let sort = self.tab(platform).sort;
             self.tab(platform).loading = true;
-            let api_key_task = api_key.clone();
             self.spawn_job(
-                move || match platform {
-                    ContentPlatform::Modrinth => content::search_modrinth(
+                move || {
+                    content::search_modrinth(
                         &crate::net::agent(),
                         kind,
                         &query,
@@ -2674,16 +3201,7 @@ impl App {
                         sort,
                         30,
                     )
-                    .map_err(|e| e.to_string()),
-                    ContentPlatform::CurseForge => content::search_curseforge(
-                        &crate::net::agent(),
-                        &api_key_task,
-                        kind,
-                        &query,
-                        &mc,
-                        30,
-                    )
-                    .map_err(|e| e.to_string()),
+                    .map_err(|e| e.to_string())
                 },
                 move |app, result| {
                     let tab = app.tab(platform);
@@ -2822,23 +3340,15 @@ impl App {
                                 .loader_filter
                                 .map(|l| l.slug().to_string());
                             self.tab(platform).files_loading = true;
-                            let api_key_task = api_key.clone();
                             self.spawn_job(
-                                move || match platform {
-                                    ContentPlatform::Modrinth => content::modrinth_versions(
+                                move || {
+                                    content::modrinth_versions(
                                         &crate::net::agent(),
                                         &id_task,
                                         &mc,
                                         loader.as_deref(),
                                     )
-                                    .map_err(|e| e.to_string()),
-                                    ContentPlatform::CurseForge => content::curseforge_files(
-                                        &crate::net::agent(),
-                                        &api_key_task,
-                                        &id_task,
-                                        &mc,
-                                    )
-                                    .map_err(|e| e.to_string()),
+                                    .map_err(|e| e.to_string())
                                 },
                                 move |app, result| {
                                     let tab = app.tab(platform);
@@ -2871,7 +3381,6 @@ impl App {
                                             .clicked()
                                         {
                                             self.download_content(
-                                                platform,
                                                 state.kind,
                                                 item.clone(),
                                                 file.clone(),
@@ -2973,14 +3482,12 @@ impl App {
     fn tab(&mut self, platform: ContentPlatform) -> &mut ContentUi {
         match platform {
             ContentPlatform::Modrinth => &mut self.modrinth,
-            ContentPlatform::CurseForge => &mut self.curseforge,
         }
     }
 
     /// Download one content file in the background.
     fn download_content(
         &mut self,
-        platform: ContentPlatform,
         kind: content::ContentKind,
         item: content::ContentItem,
         file: content::ContentFile,
@@ -3016,10 +3523,7 @@ impl App {
                         app.notify_info(msg);
                     }
                     Err(e) => {
-                        let code = match platform {
-                            ContentPlatform::Modrinth => "MODRINTH",
-                            ContentPlatform::CurseForge => "CURSEFORGE",
-                        };
+                        let code = "MODRINTH";
                         app.notify_error(code, e);
                     }
                 }
@@ -3228,18 +3732,6 @@ impl App {
                 &mut self.settings.use_custom_resolution,
                 "Custom resolution",
             );
-
-            ui.strong("CurseForge");
-            ui.horizontal(|ui| {
-                ui.label("API key");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings.curseforge_api_key)
-                        .hint_text("paste your CFCore API key")
-                        .desired_width(360.0),
-                );
-            });
-            ui.weak("Get one at https://console.curseforge.com — the Modrinth tab needs no key.");
-            ui.add_space(4.0);
 
             ui.strong("Launcher");
             ui.checkbox(

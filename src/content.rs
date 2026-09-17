@@ -1,5 +1,5 @@
 //! Mod platform integration: search and download mods, resource packs,
-//! shaders and worlds from Modrinth (Labrinth API v2) and CurseForge
+//! shaders and worlds from Modrinth (Labrinth API v2).
 //! (CFCore API v1, requires a user-supplied API key).
 //!
 //! Downloads go straight into the game directory the same way the vanilla
@@ -12,6 +12,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 use crate::net;
+
 /// The kind of downloadable content.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContentKind {
@@ -75,17 +76,6 @@ impl ContentKind {
             // Modpacks unpack into their own versions/<id> dir at install.
             ContentKind::Modpack => "versions",
             _ => "downloads",
-        }
-    }
-
-    /// The CurseForge `classId` for Minecraft content.
-    pub fn curseforge_class(self) -> u32 {
-        match self {
-            ContentKind::Mod => 6,           // Mods
-            ContentKind::ResourcePack => 12, // Resource Packs
-            ContentKind::Shader => 6555,     // Shaders
-            ContentKind::World => 17,        // World Gen
-            _ => 6,
         }
     }
 }
@@ -186,6 +176,8 @@ pub struct ContentFile {
     /// File name to save as.
     pub file_name: String,
     pub size: u64,
+    /// Game versions the file supports (shown as a hint in the file list).
+    #[allow(dead_code)] // display-only metadata
     pub game_versions: Vec<String>,
     /// Loader names among the game versions (CurseForge only; empty for
     /// Modrinth where loaders are a separate field).
@@ -423,187 +415,6 @@ pub fn modrinth_versions(
         .collect())
 }
 
-// ---------------------------------------------------------------------------
-// CurseForge (CFCore API v1, requires an API key)
-// ---------------------------------------------------------------------------
-
-/// Search CurseForge. `api_key` is the x-api-key value the user configured.
-pub fn search_curseforge(
-    agent: &ureq::Agent,
-    api_key: &str,
-    kind: ContentKind,
-    query: &str,
-    mc: &str,
-    limit: usize,
-) -> Result<Vec<ContentItem>> {
-    if api_key.trim().is_empty() {
-        return Err(anyhow!(
-            "CurseForge needs an API key — set it in Settings (cfwidget fallback unavailable)"
-        ));
-    }
-    // The class id selects the content category (432 is Minecraft).
-    let class_id = kind.curseforge_class();
-    let mut url = format!(
-        "https://api.curseforge.com/v1/mods/search?gameId=432&classId={class_id}&pageSize={limit}&sortField=2&sortOrder=desc"
-    );
-    if !query.trim().is_empty() {
-        url.push_str(&format!("&searchFilter={}", urlquery(query.trim())));
-    }
-    if !mc.is_empty() {
-        url.push_str(&format!("&gameVersion={}", urlquery(mc)));
-    }
-    let body = agent
-        .get(&url)
-        .set("x-api-key", api_key.trim())
-        .set("Accept", "application/json")
-        .call()
-        .map_err(net::classify)?;
-    if body.status() != 200 {
-        return Err(anyhow!("HTTP {} from CurseForge", body.status()));
-    }
-    let text = body
-        .into_string()
-        .context("failed to read the CurseForge response")?;
-    let parsed: CurseSearch =
-        serde_json::from_str(&text).context("failed to parse the CurseForge search response")?;
-    Ok(parsed
-        .data
-        .into_iter()
-        .map(|m| ContentItem {
-            id: m.id.to_string(),
-            title: m.name,
-            author: m
-                .authors
-                .first()
-                .map(|a| a.name.clone())
-                .unwrap_or_default(),
-            description: m.summary,
-            downloads: m.download_count,
-            icon_url: m.logo.map(|l| l.thumbnail_url).unwrap_or_default(),
-            categories: Vec::new(),
-            license: String::new(),
-            follows: 0,
-            date_updated: m.date_modified,
-        })
-        .collect())
-}
-
-#[derive(Debug, Deserialize)]
-struct CurseSearch {
-    #[serde(default)]
-    data: Vec<CurseMod>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CurseMod {
-    id: u64,
-    name: String,
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    download_count: u64,
-    #[serde(default)]
-    authors: Vec<CurseAuthor>,
-    #[serde(default)]
-    logo: Option<CurseLogo>,
-    #[serde(default, rename = "dateModified")]
-    date_modified: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CurseAuthor {
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CurseLogo {
-    #[serde(default, rename = "thumbnailUrl")]
-    thumbnail_url: String,
-}
-
-/// List the files of a CurseForge project, newest first.
-pub fn curseforge_files(
-    agent: &ureq::Agent,
-    api_key: &str,
-    project_id: &str,
-    mc: &str,
-) -> Result<Vec<ContentFile>> {
-    if api_key.trim().is_empty() {
-        return Err(anyhow!("CurseForge needs an API key — set it in Settings"));
-    }
-    let body = agent
-        .get(&format!(
-            "https://api.curseforge.com/v1/mods/{project_id}/files"
-        ))
-        .set("x-api-key", api_key.trim())
-        .set("Accept", "application/json")
-        .call()
-        .map_err(net::classify)?;
-    if body.status() != 200 {
-        return Err(anyhow!("HTTP {} from CurseForge", body.status()));
-    }
-    let text = body
-        .into_string()
-        .context("failed to read the CurseForge files response")?;
-    let parsed: CurseFiles =
-        serde_json::from_str(&text).context("failed to parse the CurseForge files response")?;
-    let mut files: Vec<ContentFile> = parsed
-        .data
-        .into_iter()
-        .map(|f| {
-            let loaders = f
-                .game_versions
-                .iter()
-                .filter(|v| is_loader_name(v))
-                .cloned()
-                .collect();
-            ContentFile {
-                name: f.display_name,
-                url: f.download_url.unwrap_or_default(),
-                file_name: f.file_name,
-                size: f.file_length,
-                game_versions: f.game_versions,
-                loaders,
-            }
-        })
-        .filter(|f| !f.url.is_empty())
-        .collect();
-    // Newest first (server order is not guaranteed).
-    files.truncate(200);
-    if !mc.is_empty() {
-        files.retain(|f| f.game_versions.iter().any(|v| v == mc) || f.game_versions.is_empty());
-    }
-    Ok(files)
-}
-
-#[derive(Debug, Deserialize)]
-struct CurseFiles {
-    #[serde(default)]
-    data: Vec<CurseFile>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CurseFile {
-    display_name: String,
-    file_name: String,
-    #[serde(default)]
-    download_url: Option<String>,
-    #[serde(default)]
-    file_length: u64,
-    #[serde(default)]
-    game_versions: Vec<String>,
-}
-
-/// `fabric`/`forge`/… as opposed to a game version like `1.20.1`.
-fn is_loader_name(s: &str) -> bool {
-    matches!(
-        s.to_ascii_lowercase().as_str(),
-        "fabric" | "forge" | "neoforge" | "quilt" | "rift" | "liteloader" | "modloader"
-    )
-}
-
-// ---------------------------------------------------------------------------
 // Download
 // ---------------------------------------------------------------------------
 
@@ -806,32 +617,6 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].file_name, "primary.jar");
         assert_eq!(files[0].loaders.len(), 2);
-    }
-
-    #[test]
-    fn curseforge_responses_parse() {
-        let search = r#"{"data":[{"id":238222,"name":"JEI","summary":"s","download_count":5,
-            "authors":[{"name":"mezz"}],"logo":{"thumbnailUrl":"http://x/t.png"}}]}"#;
-        let parsed: CurseSearch = serde_json::from_str(search).unwrap();
-        assert_eq!(parsed.data[0].id, 238222);
-        assert_eq!(parsed.data[0].authors[0].name, "mezz");
-
-        let files = r#"{"data":[{"displayName":"JEI 1.20.1","fileName":"jei.jar",
-            "downloadUrl":"https://edge/jei.jar","fileLength":123,
-            "gameVersions":["1.20.1","Forge"]}]}"#;
-        let parsed: CurseFiles = serde_json::from_str(files).unwrap();
-        assert_eq!(parsed.data[0].file_name, "jei.jar");
-        assert_eq!(
-            parsed.data[0].download_url.as_deref(),
-            Some("https://edge/jei.jar")
-        );
-    }
-
-    #[test]
-    fn loader_names_vs_game_versions() {
-        assert!(is_loader_name("Forge"));
-        assert!(is_loader_name("fabric"));
-        assert!(!is_loader_name("1.20.1"));
     }
 
     #[test]
