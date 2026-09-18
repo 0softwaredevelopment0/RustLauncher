@@ -476,8 +476,10 @@ pub struct App {
     pub instance_delete_pending: Option<String>,
     /// Instance selected on the General tab for the Play button.
     pub launch_instance: String,
-    /// A Stop/Kill confirmation for a specific running instance (entry index).
-    instance_terminate_pending: Option<(usize, TerminateKind)>,
+    /// A Stop/Kill confirmation for a specific running instance, keyed by the
+    /// game's PID handle (not a registry index — entries can shift while the
+    /// dialog is open, and an index would then terminate the wrong game).
+    instance_terminate_pending: Option<(Arc<Mutex<Option<u32>>>, TerminateKind)>,
 
     // Version list (merged local + remote).
     pub manifest: Option<Result<Manifest, String>>,
@@ -971,14 +973,12 @@ impl App {
     }
 
     fn save_servers(&mut self) {
-        self.versions =
-            version::list_versions(&resolve_game_dir(&self.settings)).unwrap_or_default();
+        self.versions = version::list_versions(&self.active_game_dir()).unwrap_or_default();
         let _ = self.servers.save(&home::servers_file(&self.home_dir));
     }
 
     fn reload_versions(&mut self) {
-        self.versions =
-            version::list_versions(&resolve_game_dir(&self.settings)).unwrap_or_default();
+        self.versions = version::list_versions(&self.active_game_dir()).unwrap_or_default();
     }
 
     fn refresh_skins(&mut self) {
@@ -1017,10 +1017,11 @@ impl App {
     }
 
     fn selected_version(&self) -> Option<&Version> {
+        // No silent fallback to the first version: launching a version the
+        // user never picked would be a nasty surprise.
         self.versions
             .iter()
             .find(|v| v.name == self.settings.selected_version)
-            .or_else(|| self.versions.first())
     }
 
     fn current_account(&self) -> Option<auth::Account> {
@@ -1046,6 +1047,26 @@ impl App {
             .any(|g| g.running.load(Ordering::SeqCst))
     }
 
+    /// Whether the given instance currently has a live game process.
+    fn instance_running(&self, name: &str) -> bool {
+        self.running_games
+            .iter()
+            .any(|g| g.instance == name && g.running.load(Ordering::SeqCst))
+    }
+
+    /// The game directory the launcher UI operates on: the selected
+    /// instance's directory when one is chosen, otherwise the global
+    /// Settings directory.
+    fn active_game_dir(&self) -> PathBuf {
+        if let Some(inst) = self.instance_store.get(&self.launch_instance) {
+            let dir = PathBuf::from(inst.game_dir.trim());
+            if !dir.as_os_str().is_empty() {
+                return dir;
+            }
+        }
+        resolve_game_dir(&self.settings)
+    }
+
     fn start_game(&mut self) {
         self.launch_error = None;
 
@@ -1055,6 +1076,12 @@ impl App {
             self.screen = Screen::Instances;
             return;
         };
+        // One live process per instance: launching twice would corrupt the
+        // instance's saves/session data.
+        if self.instance_running(&instance.name) {
+            self.play_status = format!("{} is already running", instance.name);
+            return;
+        }
         let game_dir = PathBuf::from(instance.game_dir.trim());
 
         if game_dir.to_string_lossy().trim().is_empty() {
@@ -2102,8 +2129,8 @@ impl eframe::App for App {
         if self.instance_delete_pending.is_some() {
             self.show_instance_delete_confirmation(ctx);
         }
-        if let Some((idx, kind)) = self.instance_terminate_pending {
-            self.show_instance_terminate_confirmation(ctx, idx, kind);
+        if let Some((pid_handle, kind)) = self.instance_terminate_pending.clone() {
+            self.show_instance_terminate_confirmation(ctx, &pid_handle, kind);
         }
 
         egui::CentralPanel::default().show(ctx, |ui| match self.screen {
@@ -2194,7 +2221,9 @@ impl App {
         ui.add_space(8.0);
 
         ui.horizontal(|ui| {
-            let play_enabled = !self.any_game_running();
+            // Several instances may run at once; only the selected one being
+            // alive blocks the button.
+            let play_enabled = !self.instance_running(&self.launch_instance);
             if ui
                 .add_enabled(
                     play_enabled,
@@ -2477,8 +2506,9 @@ impl App {
                             .on_disabled_hover_text("Not running")
                             .clicked()
                         {
+                            let pid = self.running_games[idx].pid.clone();
                             if self.settings.confirm_stop {
-                                self.instance_terminate_pending = Some((idx, TerminateKind::Stop));
+                                self.instance_terminate_pending = Some((pid, TerminateKind::Stop));
                             } else {
                                 self.stop_instance_pid(idx);
                             }
@@ -2494,8 +2524,9 @@ impl App {
                             .on_disabled_hover_text("Not running")
                             .clicked()
                         {
+                            let pid = self.running_games[idx].pid.clone();
                             if self.settings.confirm_kill {
-                                self.instance_terminate_pending = Some((idx, TerminateKind::Kill));
+                                self.instance_terminate_pending = Some((pid, TerminateKind::Kill));
                             } else {
                                 self.kill_instance_pid(idx);
                             }
@@ -2583,8 +2614,9 @@ impl App {
                             .clicked()
                         {
                             let idx = game.unwrap();
+                            let pid = self.running_games[idx].pid.clone();
                             if self.settings.confirm_stop {
-                                self.instance_terminate_pending = Some((idx, TerminateKind::Stop));
+                                self.instance_terminate_pending = Some((pid, TerminateKind::Stop));
                             } else {
                                 self.stop_instance_pid(idx);
                             }
@@ -2601,8 +2633,9 @@ impl App {
                             .clicked()
                         {
                             let idx = game.unwrap();
+                            let pid = self.running_games[idx].pid.clone();
                             if self.settings.confirm_kill {
-                                self.instance_terminate_pending = Some((idx, TerminateKind::Kill));
+                                self.instance_terminate_pending = Some((pid, TerminateKind::Kill));
                             } else {
                                 self.kill_instance_pid(idx);
                             }
@@ -2623,11 +2656,16 @@ impl App {
                     }
 
                     ui.horizontal(|ui| {
+                        let game_alive = self.instance_running(&instance.name);
                         if ui
-                            .button(
-                                egui::RichText::new(format!("{}  Delete", icons::DELETE))
-                                    .color(egui::Color32::LIGHT_RED),
+                            .add_enabled(
+                                !game_alive,
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{}  Delete", icons::DELETE))
+                                        .color(egui::Color32::LIGHT_RED),
+                                ),
                             )
+                            .on_disabled_hover_text("Stop the game before deleting")
                             .clicked()
                         {
                             self.instance_delete_pending = Some(instance.name.clone());
@@ -2715,10 +2753,16 @@ impl App {
     fn show_instance_terminate_confirmation(
         &mut self,
         ctx: &egui::Context,
-        index: usize,
+        pid_handle: &Arc<Mutex<Option<u32>>>,
         kind: TerminateKind,
     ) {
-        let Some(game) = self.running_games.get(index) else {
+        // The game may have exited (or the registry shifted) while the
+        // dialog was open — resolve the entry by its PID handle, not index.
+        let Some(game) = self
+            .running_games
+            .iter()
+            .find(|g| Arc::ptr_eq(&g.pid, pid_handle))
+        else {
             self.instance_terminate_pending = None;
             return;
         };
@@ -2780,16 +2824,10 @@ impl App {
                             }
                             self.save_settings();
                         }
-                        // The game may have exited while the dialog was open.
-                        let idx = self
-                            .running_games
-                            .iter()
-                            .position(|g| g.running.load(Ordering::SeqCst))
-                            .unwrap_or(index);
                         if kill_confirmed {
-                            self.kill_instance_pid(idx);
+                            self.kill_pid(*pid_handle.lock().unwrap_or_else(|e| e.into_inner()));
                         } else {
-                            self.stop_instance_pid(idx);
+                            self.stop_pid(*pid_handle.lock().unwrap_or_else(|e| e.into_inner()));
                         }
                     }
                     if ui.button("Cancel").clicked() {
@@ -3010,7 +3048,7 @@ impl App {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let game_dir = resolve_game_dir(&self.settings);
+        let game_dir = self.active_game_dir();
         let progress = self.install_progress.clone();
         let installing = self.installing.clone();
         let mc_display = mc.clone();
@@ -3063,8 +3101,8 @@ impl App {
 
         // The game root must be configured; the installer writes into
         // `<game dir>/versions/…`.
-        let game_dir = resolve_game_dir(&self.settings);
-        let game_dir_ok = !self.settings.game_directory.trim().is_empty() || game_dir.exists();
+        let game_dir = self.active_game_dir();
+        let game_dir_ok = game_dir.exists();
         if !game_dir_ok {
             ui.colored_label(
                 egui::Color32::YELLOW,
@@ -3185,7 +3223,7 @@ impl App {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let game_dir = resolve_game_dir(&self.settings);
+        let game_dir = self.active_game_dir();
         let progress = self.install_progress.clone();
         let installing = self.installing.clone();
 
@@ -3277,7 +3315,7 @@ impl App {
         ui.separator();
         ui.horizontal(|ui| {
             if ui.button("Save to servers.dat").clicked() {
-                let path = servers::servers_dat_path(&resolve_game_dir(&self.settings));
+                let path = servers::servers_dat_path(&self.active_game_dir());
                 let list = self.servers.servers.clone();
                 match servers::write_servers_dat(&path, &list) {
                     Ok(()) => {
@@ -3287,7 +3325,7 @@ impl App {
                 }
             }
             if ui.button("Import from servers.dat").clicked() {
-                let path = servers::servers_dat_path(&resolve_game_dir(&self.settings));
+                let path = servers::servers_dat_path(&self.active_game_dir());
                 let imported = servers::read_servers_dat(&path);
                 if imported.is_empty() {
                     self.servers_dat_status = format!("nothing to import from {}", path.display());
@@ -4567,7 +4605,7 @@ impl App {
             .content_progress
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = format!("downloading {}…", file.file_name);
-        let game_dir = resolve_game_dir(&self.settings);
+        let game_dir = self.active_game_dir();
         // Data packs, shaders, plugins and server jars land in the user's
         // Downloads folder; mods and resource packs go into the game dir.
         let game_dir = if kind.goes_to_downloads() {
