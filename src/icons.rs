@@ -27,6 +27,13 @@ pub const EXTENSION: &str = "\u{e87b}"; // extension
 pub const ARTICLE: &str = "\u{ef42}"; // article
 pub const SETTINGS: &str = "\u{e8b8}"; // settings
 pub const BUILD: &str = "\u{e869}"; // build
+pub const VIDEOGAME_ASSET: &str = "\u{e338}"; // videogame_asset
+pub const ADD: &str = "\u{e145}"; // add
+pub const DELETE: &str = "\u{e872}"; // delete
+pub const STOP: &str = "\u{e047}"; // stop
+pub const KILL: &str = "\u{e14c}"; // cancel
+pub const FOLDER: &str = "\u{e2c8}"; // folder
+pub const CHECK_CIRCLE: &str = "\u{e86c}"; // check_circle
 
 /// All icon constants, used by tests.
 #[cfg(test)]
@@ -42,6 +49,13 @@ pub const ALL_ICONS: &[&str] = &[
     ARTICLE,
     SETTINGS,
     BUILD,
+    VIDEOGAME_ASSET,
+    ADD,
+    DELETE,
+    STOP,
+    KILL,
+    FOLDER,
+    CHECK_CIRCLE,
 ];
 
 /// Install the icon font into the egui context (idempotent). Call once at

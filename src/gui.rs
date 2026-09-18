@@ -16,6 +16,7 @@ use crate::content;
 use crate::diagnostics;
 use crate::home::{self};
 use crate::icons;
+use crate::instances;
 use crate::launcher::{self, LaunchPlan};
 use crate::logs::SessionLog;
 use crate::news::{self, NewsItem};
@@ -456,13 +457,27 @@ pub struct App {
     /// Live state of the "Don't ask again" checkbox while the dialog is open.
     terminate_dont_ask: bool,
 
-    // Game process.
+    // Game process (the single-instance legacy fields are kept for the
+    // most-recently-started game: General tab status and Console selection).
     pub console: Arc<Mutex<Vec<String>>>,
     pub console_seq: usize,
-    pub game_running: Arc<AtomicBool>,
+    /// One registry entry per running game; several can run at once.
+    pub running_games: Vec<RunningGame>,
     game_log: Arc<Mutex<Option<SessionLog>>>,
-    /// PID of the running game's java process, shared with the launch thread.
+    /// PID of the most recently started game (legacy single-instance field).
     game_pid: Arc<Mutex<Option<u32>>>,
+
+    // Instances tab.
+    pub instance_store: instances::InstanceStore,
+    pub instances_error: Option<String>,
+    pub new_instance_name: String,
+    pub new_instance_dir: String,
+    /// Instance name awaiting deletion confirmation.
+    pub instance_delete_pending: Option<String>,
+    /// Instance selected on the General tab for the Play button.
+    pub launch_instance: String,
+    /// A Stop/Kill confirmation for a specific running instance (entry index).
+    instance_terminate_pending: Option<(usize, TerminateKind)>,
 
     // Version list (merged local + remote).
     pub manifest: Option<Result<Manifest, String>>,
@@ -564,6 +579,25 @@ enum TerminateKind {
     Kill,
 }
 
+/// A game process started from an instance. Several can be alive at the same
+/// time — one entry per launch, each with its own console buffer and PID.
+pub struct RunningGame {
+    /// The instance this game was started from.
+    pub instance: String,
+    /// Version launched.
+    pub version: String,
+    /// Live console of this particular game.
+    pub console: Arc<Mutex<Vec<String>>>,
+    /// True while the game process is alive (cleared by the worker thread).
+    pub running: Arc<AtomicBool>,
+    /// The game's java PID for Stop/Kill.
+    pub pid: Arc<Mutex<Option<u32>>>,
+    /// Last launch error, surfaced on the Instances tab.
+    pub error: Arc<Mutex<Option<String>>>,
+    /// Exit status text set by the worker when the game ends.
+    pub status: Arc<Mutex<String>>,
+}
+
 /// State of an in-flight Microsoft device-code sign-in.
 #[derive(Debug, Clone)]
 pub(crate) struct MsLoginState {
@@ -588,6 +622,7 @@ impl LauncherPaths {
 pub enum Screen {
     General,
     Console,
+    Instances,
     Versions,
     Servers,
     Accounts,
@@ -777,6 +812,7 @@ impl App {
         let servers = ServerStore::load_or_import(&home_dir, &game_dir);
         let versions = version::list_versions(&game_dir).unwrap_or_default();
         let profile_index = profiles::ProfileIndex::load_or_create(&home::profiles_dir(&home_dir));
+        let instance_store = instances::InstanceStore::load(&home_dir);
 
         let mut app = App {
             home_dir,
@@ -792,9 +828,16 @@ impl App {
             terminate_dont_ask: false,
             console: Arc::new(Mutex::new(Vec::new())),
             console_seq: 0,
-            game_running: Arc::new(AtomicBool::new(false)),
+            running_games: Vec::new(),
             game_log: Arc::new(Mutex::new(None)),
             game_pid: Arc::new(Mutex::new(None)),
+            instance_store,
+            instances_error: None,
+            new_instance_name: String::new(),
+            new_instance_dir: String::new(),
+            instance_delete_pending: None,
+            launch_instance: String::new(),
+            instance_terminate_pending: None,
             manifest: None,
             manifest_loading: false,
             version_filter: VersionFilter::All,
@@ -996,27 +1039,33 @@ impl App {
 
     // ── game launch ────────────────────────────────────────────
 
+    /// Any game process is alive.
+    fn any_game_running(&self) -> bool {
+        self.running_games
+            .iter()
+            .any(|g| g.running.load(Ordering::SeqCst))
+    }
+
     fn start_game(&mut self) {
-        if self.game_running.load(Ordering::SeqCst) {
-            self.play_status = "The game is already running".into();
-            return;
-        }
         self.launch_error = None;
 
-        // The game directory must be configured explicitly.
-        if resolve_game_dir(&self.settings)
-            .to_string_lossy()
-            .trim()
-            .is_empty()
-        {
+        let Some(instance) = self.instance_store.get(&self.launch_instance).cloned() else {
             self.launch_error =
-                Some("No game directory configured. Set it in Settings first.".into());
+                Some("No instance selected. Create one on the Instances tab first.".into());
+            self.screen = Screen::Instances;
+            return;
+        };
+        let game_dir = PathBuf::from(instance.game_dir.trim());
+
+        if game_dir.to_string_lossy().trim().is_empty() {
+            self.launch_error =
+                Some("The instance has no game directory. Edit it on the Instances tab.".into());
             return;
         }
-        if !resolve_game_dir(&self.settings).is_dir() {
+        if !game_dir.is_dir() {
             self.launch_error = Some(format!(
-                "Game directory does not exist: {}",
-                resolve_game_dir(&self.settings).display()
+                "Instance game directory does not exist: {}",
+                game_dir.display()
             ));
             return;
         }
@@ -1065,47 +1114,81 @@ impl App {
         };
 
         let settings = self.settings.clone();
-        let game_dir = resolve_game_dir(&settings);
-        let console = self.console.clone();
-        let running = self.game_running.clone();
-        let game_log = self.game_log.clone();
-        let game_pid = self.game_pid.clone();
+        let console = Arc::new(Mutex::new(Vec::new()));
+        let running = Arc::new(AtomicBool::new(false));
+        let pid = Arc::new(Mutex::new(None));
+        let log: Arc<Mutex<Option<SessionLog>>> = Arc::new(Mutex::new(None));
+        let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(String::new()));
+        // A finished entry of the same instance is replaced by the new launch.
+        self.running_games
+            .retain(|g| g.instance != instance.name || g.running.load(Ordering::SeqCst));
+        self.running_games.push(RunningGame {
+            instance: instance.name.clone(),
+            version: version.name.clone(),
+            console: console.clone(),
+            running: running.clone(),
+            pid: pid.clone(),
+            error: error.clone(),
+            status: status.clone(),
+        });
+        // Keep the legacy single-game fields pointing at the newest launch so
+        // the General tab status and Console follow the latest game.
+        self.game_pid = pid.clone();
+        self.game_log = log.clone();
+        self.console = console.clone();
+        self.console_seq = 0;
+
         let save_log = settings.save_console_log;
         let home_dir = self.home_dir.clone();
 
         running.store(true, Ordering::SeqCst);
         self.screen = Screen::Console;
-        self.play_status = format!("Launching {} …", version.name);
-        self.notify_info(format!("Starting {} …", version.name));
+        self.play_status = format!("Launching {} ({}) …", version.name, instance.name);
+        self.notify_info(format!("Starting {} ({}) …", version.name, instance.name));
 
         self.spawn_job(
             move || {
                 let result = run_game_process(
-                    &game_dir, &version, &account, &settings, console, save_log, &home_dir,
-                    game_log, game_pid,
+                    &game_dir, &version, &account, &settings, console, save_log, &home_dir, log,
+                    pid,
                 );
                 running.store(false, Ordering::SeqCst);
+                if let Err(e) = &result {
+                    *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{e:#}"));
+                }
+                if let Ok(code) = &result {
+                    *status.lock().unwrap_or_else(|e| e.into_inner()) = if *code == 0 {
+                        "exited normally".to_string()
+                    } else {
+                        format!("exited with code {code}")
+                    };
+                }
                 result
             },
-            |app, result| match result {
-                Ok(code) => {
-                    app.play_status = if code == 0 {
-                        "Game exited normally".to_string()
-                    } else {
-                        format!("Game exited with code {code}")
-                    };
-                    if code == 0 {
-                        app.notify_info("Game stopped");
-                    } else {
-                        app.notify_error("GAME-EXIT", format!("Game exited with code {code}"));
+            move |app, result: Result<i32>| {
+                let instance = instance.name.clone();
+                match result {
+                    Ok(code) => {
+                        app.play_status = if code == 0 {
+                            format!("{} exited normally", instance)
+                        } else {
+                            format!("{} exited with code {code}", instance)
+                        };
+                        if code == 0 {
+                            app.notify_info(format!("{} stopped", instance));
+                        } else {
+                            app.notify_error(
+                                "GAME-EXIT",
+                                format!("{} exited with code {code}", instance),
+                            );
+                        }
                     }
-                    *app.game_pid.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                }
-                Err(e) => {
-                    app.play_status.clear();
-                    app.launch_error = Some(format!("{e:#}"));
-                    app.notify_error("LAUNCH", format!("{e:#}"));
-                    *app.game_pid.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    Err(e) => {
+                        app.play_status.clear();
+                        app.launch_error = Some(format!("{e:#}"));
+                        app.notify_error("LAUNCH", format!("{e:#}"));
+                    }
                 }
             },
         );
@@ -1267,9 +1350,23 @@ impl App {
     }
 
     fn stop_game(&mut self) {
-        // Ask the game to close politely (like the window's X):
-        // taskkill without /F posts WM_CLOSE; the JVM runs shutdown hooks.
+        // Legacy single-game Stop: act on the most recently started game.
         let pid = *self.game_pid.lock().unwrap_or_else(|e| e.into_inner());
+        self.stop_pid(pid);
+        self.play_status = "Stop requested".into();
+    }
+
+    /// Politely stop a specific running game by PID (posts WM_CLOSE; the JVM
+    /// runs shutdown hooks).
+    fn stop_instance_pid(&mut self, index: usize) {
+        let Some(game) = self.running_games.get(index) else {
+            return;
+        };
+        let pid = *game.pid.lock().unwrap_or_else(|e| e.into_inner());
+        self.stop_pid(pid);
+    }
+
+    fn stop_pid(&mut self, pid: Option<u32>) {
         if let Some(pid) = pid {
             match std::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string()])
@@ -1287,7 +1384,6 @@ impl App {
         } else {
             self.log_console("[RustLauncher] Stop: no running game process");
         }
-        self.play_status = "Stop requested".into();
     }
 
     /// The Stop/Kill confirmation dialog: material warning triangle,
@@ -1377,6 +1473,20 @@ impl App {
     /// Force-kill the game process tree (taskkill /T /F) — the last resort.
     fn kill_game(&mut self) {
         let pid = *self.game_pid.lock().unwrap_or_else(|e| e.into_inner());
+        self.kill_pid(pid);
+        self.play_status = "Kill issued".into();
+    }
+
+    /// Force-kill a specific running game (Instances tab).
+    fn kill_instance_pid(&mut self, index: usize) {
+        let Some(game) = self.running_games.get(index) else {
+            return;
+        };
+        let pid = *game.pid.lock().unwrap_or_else(|e| e.into_inner());
+        self.kill_pid(pid);
+    }
+
+    fn kill_pid(&mut self, pid: Option<u32>) {
         if let Some(pid) = pid {
             self.log_console(format!(
                 "[RustLauncher] Kill: terminating PID {pid} and its child processes"
@@ -1403,7 +1513,6 @@ impl App {
         } else {
             self.log_console("[RustLauncher] Kill: no running game process");
         }
-        self.play_status = "Kill issued".into();
     }
 
     // ── per-frame plumbing ─────────────────────────────────────
@@ -1495,7 +1604,6 @@ fn run_game_process(
     *game_log.lock().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(code)
 }
-
 /// Run the plan, streaming output lines into the console buffer.
 fn spawn_and_stream(
     plan: &LaunchPlan,
@@ -1930,8 +2038,7 @@ impl eframe::App for App {
 
         // Repaint while the game runs or a download is in progress so the
         // console and progress labels keep moving without user input.
-        let busy =
-            self.game_running.load(Ordering::SeqCst) || self.installing.load(Ordering::SeqCst);
+        let busy = self.any_game_running() || self.installing.load(Ordering::SeqCst);
         if busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }
@@ -1948,6 +2055,10 @@ impl eframe::App for App {
             for (screen, label) in [
                 (Screen::General, format!("{}  General", icons::PLAY_ARROW)),
                 (Screen::Console, format!("{}  Console", icons::TERMINAL)),
+                (
+                    Screen::Instances,
+                    format!("{}  Instances", icons::VIDEOGAME_ASSET),
+                ),
                 (Screen::Versions, format!("{}  Versions", icons::LAYERS)),
                 (Screen::Servers, format!("{}  Servers", icons::DNS)),
                 (
@@ -1977,7 +2088,7 @@ impl eframe::App for App {
                 ui.label(format!("Player: {}", account.username));
             }
             ui.label(format!("Version: {}", self.settings.selected_version));
-            if self.game_running.load(Ordering::SeqCst) {
+            if self.any_game_running() {
                 ui.colored_label(egui::Color32::LIGHT_GREEN, "Game running");
             }
         });
@@ -1988,9 +2099,17 @@ impl eframe::App for App {
             self.show_account_removal(ctx);
         }
 
+        if self.instance_delete_pending.is_some() {
+            self.show_instance_delete_confirmation(ctx);
+        }
+        if let Some((idx, kind)) = self.instance_terminate_pending {
+            self.show_instance_terminate_confirmation(ctx, idx, kind);
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| match self.screen {
             Screen::General => self.ui_general(ui),
             Screen::Console => self.ui_console(ui),
+            Screen::Instances => self.ui_instances(ui),
             Screen::Versions => self.ui_versions(ui),
             Screen::Servers => self.ui_servers(ui),
             Screen::Accounts => self.ui_accounts(ui),
@@ -2011,6 +2130,29 @@ impl App {
         ui.add_space(6.0);
 
         egui::Grid::new("play_grid").num_columns(2).show(ui, |ui| {
+            ui.label("Instance");
+            let instance_names: Vec<String> = self
+                .instance_store
+                .instances
+                .iter()
+                .map(|i| i.name.clone())
+                .collect();
+            if self.launch_instance.is_empty() && !instance_names.is_empty() {
+                self.launch_instance = instance_names[0].clone();
+            }
+            egui::ComboBox::from_id_salt("instance_combo")
+                .selected_text(if self.launch_instance.is_empty() {
+                    "— none —".to_string()
+                } else {
+                    self.launch_instance.clone()
+                })
+                .show_ui(ui, |ui| {
+                    for name in &instance_names {
+                        ui.selectable_value(&mut self.launch_instance, name.clone(), name.clone());
+                    }
+                });
+            ui.end_row();
+
             ui.label("Account");
             let current = self
                 .accounts
@@ -2052,7 +2194,7 @@ impl App {
         ui.add_space(8.0);
 
         ui.horizontal(|ui| {
-            let play_enabled = !self.game_running.load(Ordering::SeqCst);
+            let play_enabled = !self.any_game_running();
             if ui
                 .add_enabled(
                     play_enabled,
@@ -2065,8 +2207,8 @@ impl App {
             if ui.button("Rescan versions").clicked() {
                 self.reload_versions();
             }
-            let game_running = self.game_running.load(Ordering::SeqCst);
-            let stop = egui::Button::new("Stop");
+            let game_running = self.any_game_running();
+            let stop = egui::Button::new(format!("{} Stop", icons::STOP));
             if ui
                 .add_enabled(game_running, stop)
                 .on_disabled_hover_text("The game is not running")
@@ -2079,8 +2221,10 @@ impl App {
                     self.stop_game();
                 }
             }
-            let kill =
-                egui::Button::new(egui::RichText::new("☠ Kill").color(egui::Color32::LIGHT_RED));
+            let kill = egui::Button::new(
+                egui::RichText::new(format!("{} Kill", icons::KILL))
+                    .color(egui::Color32::LIGHT_RED),
+            );
             if ui
                 .add_enabled(game_running, kill)
                 .on_disabled_hover_text("The game is not running")
@@ -2112,6 +2256,38 @@ impl App {
     fn ui_console(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Console");
+            // When several games run at once, pick which console to show.
+            let alive: Vec<(usize, String)> = self
+                .running_games
+                .iter()
+                .enumerate()
+                .filter(|(_, g)| g.running.load(Ordering::SeqCst))
+                .map(|(idx, g)| (idx, g.instance.clone()))
+                .collect();
+            if alive.len() > 1 {
+                let current = alive
+                    .iter()
+                    .find(|(idx, _)| {
+                        self.running_games
+                            .get(*idx)
+                            .map(|g| Arc::ptr_eq(&g.console, &self.console))
+                            .unwrap_or(false)
+                    })
+                    .map(|(_, n)| n.clone())
+                    .unwrap_or_else(|| "…".to_string());
+                egui::ComboBox::from_id_salt("console_instance")
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        for (idx, name) in &alive {
+                            if ui.selectable_label(false, name.clone()).clicked() {
+                                if let Some(g) = self.running_games.get(*idx) {
+                                    self.console = g.console.clone();
+                                    self.console_seq = 0;
+                                }
+                            }
+                        }
+                    });
+            }
             // How much of the game output to display.
             egui::ComboBox::from_id_salt("console_mode")
                 .selected_text(self.settings.console_log_mode.label())
@@ -2177,6 +2353,448 @@ impl App {
                                 ui.end_row();
                             }
                         });
+                });
+            });
+    }
+
+    // ── Instances tab ───────────────────────────────────────
+
+    fn ui_instances(&mut self, ui: &mut egui::Ui) {
+        ui.heading(format!("{}  Instances", icons::VIDEOGAME_ASSET));
+        ui.add_space(6.0);
+
+        // ── Create section ──
+        egui::CollapsingHeader::new(
+            egui::RichText::new(format!("{}  New instance", icons::ADD)).strong(),
+        )
+        .default_open(self.instance_store.instances.is_empty())
+        .show(ui, |ui| {
+            egui::Grid::new("new_instance_grid")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label("Name");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.new_instance_name)
+                            .hint_text("My instance")
+                            .desired_width(260.0),
+                    );
+                    ui.end_row();
+
+                    ui.label("Game directory");
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.new_instance_dir)
+                                .hint_text("C:\\Games\\MyPack")
+                                .desired_width(260.0),
+                        );
+                        if ui.button(format!("{} Browse…", icons::FOLDER)).clicked() {
+                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                                self.new_instance_dir = dir.to_string_lossy().to_string();
+                            }
+                        }
+                    });
+                    ui.end_row();
+                });
+            if ui
+                .button(format!("{}  Create instance", icons::CHECK_CIRCLE))
+                .clicked()
+            {
+                self.instances_error = None;
+                match self
+                    .instance_store
+                    .create(&self.new_instance_name, &self.new_instance_dir)
+                {
+                    Ok(name) => {
+                        if let Err(e) = self.instance_store.save(&self.home_dir) {
+                            self.instances_error = Some(format!("{e:#}"));
+                            self.notify_error("INSTANCES", format!("{e:#}"));
+                        } else {
+                            self.notify_info(format!("Instance '{name}' created"));
+                            self.new_instance_name.clear();
+                            self.new_instance_dir.clear();
+                        }
+                    }
+                    Err(e) => {
+                        self.instances_error = Some(format!("{e:#}"));
+                    }
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.separator();
+
+        // ── Running games ──
+        let running_count = self.running_games.len();
+        if running_count > 0 {
+            egui::CollapsingHeader::new(
+                egui::RichText::new(format!(
+                    "{}  Running games ({})",
+                    icons::PLAY_ARROW,
+                    self.running_games
+                        .iter()
+                        .filter(|g| g.running.load(Ordering::SeqCst))
+                        .count()
+                ))
+                .strong(),
+            )
+            .default_open(true)
+            .show(ui, |ui| {
+                let entries: Vec<(usize, String, String, bool)> = self
+                    .running_games
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, g)| {
+                        (
+                            idx,
+                            g.instance.clone(),
+                            g.version.clone(),
+                            g.running.load(Ordering::SeqCst),
+                        )
+                    })
+                    .collect();
+                for (idx, inst, ver, alive) in entries {
+                    ui.horizontal(|ui| {
+                        let status_icon = if alive {
+                            egui::RichText::new(icons::CHECK_CIRCLE)
+                                .color(egui::Color32::LIGHT_GREEN)
+                        } else {
+                            egui::RichText::new(icons::STOP).color(egui::Color32::GRAY)
+                        };
+                        ui.label(status_icon);
+                        ui.label(format!("{inst} — {ver}"));
+                        if alive {
+                            ui.weak("(running)");
+                        } else if let Some(g) = self.running_games.get(idx) {
+                            let s = g.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            if !s.is_empty() {
+                                ui.weak(format!("({s})"));
+                            }
+                        }
+
+                        if ui
+                            .add_enabled(alive, egui::Button::new(format!("{} Stop", icons::STOP)))
+                            .on_disabled_hover_text("Not running")
+                            .clicked()
+                        {
+                            if self.settings.confirm_stop {
+                                self.instance_terminate_pending = Some((idx, TerminateKind::Stop));
+                            } else {
+                                self.stop_instance_pid(idx);
+                            }
+                        }
+                        if ui
+                            .add_enabled(
+                                alive,
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{} Kill", icons::KILL))
+                                        .color(egui::Color32::LIGHT_RED),
+                                ),
+                            )
+                            .on_disabled_hover_text("Not running")
+                            .clicked()
+                        {
+                            if self.settings.confirm_kill {
+                                self.instance_terminate_pending = Some((idx, TerminateKind::Kill));
+                            } else {
+                                self.kill_instance_pid(idx);
+                            }
+                        }
+                        if ui.button("Console").clicked() {
+                            if let Some(g) = self.running_games.get(idx) {
+                                self.console = g.console.clone();
+                                self.console_seq = 0;
+                            }
+                            self.screen = Screen::Console;
+                        }
+                    });
+                    if let Some(g) = self.running_games.get(idx) {
+                        let err = g.error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        if let Some(err) = err {
+                            ui.colored_label(egui::Color32::LIGHT_RED, format!("Error: {err}"));
+                        }
+                    }
+                }
+                ui.add_space(4.0);
+                // Clean up finished entries on demand.
+                if ui.button("Clear finished").clicked() {
+                    self.running_games
+                        .retain(|g| g.running.load(Ordering::SeqCst));
+                }
+            });
+            ui.separator();
+        }
+
+        // ── Instance list ──
+        if self.instance_store.instances.is_empty() {
+            ui.add_space(6.0);
+            ui.weak("No instances yet — create one above to start playing.");
+        }
+
+        let names: Vec<String> = self
+            .instance_store
+            .instances
+            .iter()
+            .map(|i| i.name.clone())
+            .collect();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for name in &names {
+                let Some(instance) = self.instance_store.get(name).cloned() else {
+                    continue;
+                };
+                let game = self
+                    .running_games
+                    .iter()
+                    .position(|g| g.instance == *name && g.running.load(Ordering::SeqCst));
+
+                ui.add_space(2.0);
+                egui::CollapsingHeader::new(
+                    egui::RichText::new(format!(
+                        "{}  {}{}",
+                        icons::VIDEOGAME_ASSET,
+                        instance.name,
+                        if game.is_some() { "  ● running" } else { "" }
+                    ))
+                    .strong(),
+                )
+                .id_salt(("instance", name.as_str()))
+                .show(ui, |ui| {
+                    ui.label(format!("Directory: {}", instance.game_dir));
+
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                game.is_none(),
+                                egui::Button::new(format!("{}  Launch", icons::PLAY_ARROW)),
+                            )
+                            .clicked()
+                        {
+                            self.launch_instance = instance.name.clone();
+                            self.start_game();
+                        }
+
+                        let stop_kill_enabled = game.is_some();
+                        if ui
+                            .add_enabled(
+                                stop_kill_enabled,
+                                egui::Button::new(format!("{} Stop", icons::STOP)),
+                            )
+                            .on_disabled_hover_text("Not running")
+                            .clicked()
+                        {
+                            let idx = game.unwrap();
+                            if self.settings.confirm_stop {
+                                self.instance_terminate_pending = Some((idx, TerminateKind::Stop));
+                            } else {
+                                self.stop_instance_pid(idx);
+                            }
+                        }
+                        if ui
+                            .add_enabled(
+                                stop_kill_enabled,
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{} Kill", icons::KILL))
+                                        .color(egui::Color32::LIGHT_RED),
+                                ),
+                            )
+                            .on_disabled_hover_text("Not running")
+                            .clicked()
+                        {
+                            let idx = game.unwrap();
+                            if self.settings.confirm_kill {
+                                self.instance_terminate_pending = Some((idx, TerminateKind::Kill));
+                            } else {
+                                self.kill_instance_pid(idx);
+                            }
+                        }
+                    });
+
+                    if let Some(idx) = game {
+                        if let Some(g) = self.running_games.get(idx) {
+                            let err = g.error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            if let Some(err) = err {
+                                ui.colored_label(egui::Color32::LIGHT_RED, format!("Error: {err}"));
+                            }
+                            let status = g.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            if !status.is_empty() {
+                                ui.weak(status);
+                            }
+                        }
+                    }
+
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(
+                                egui::RichText::new(format!("{}  Delete", icons::DELETE))
+                                    .color(egui::Color32::LIGHT_RED),
+                            )
+                            .clicked()
+                        {
+                            self.instance_delete_pending = Some(instance.name.clone());
+                        }
+                    });
+                });
+            }
+        });
+
+        if let Some(err) = &self.instances_error {
+            ui.colored_label(egui::Color32::LIGHT_RED, err);
+        }
+    }
+
+    /// The instance-delete confirmation dialog (same style as Stop/Kill).
+    fn show_instance_delete_confirmation(&mut self, ctx: &egui::Context) {
+        let Some(name) = self.instance_delete_pending.clone() else {
+            return;
+        };
+        let screen = ctx.screen_rect();
+
+        egui::Area::new(egui::Id::new("instance_delete_dim"))
+            .order(egui::Order::Middle)
+            .fixed_pos(screen.left_top())
+            .show(ctx, |ui| {
+                let resp = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
+                if resp.clicked() {
+                    self.instance_delete_pending = None;
+                }
+            });
+
+        egui::Window::new(egui::RichText::new("Confirm").strong())
+            .id(egui::Id::new("instance_delete_dialog"))
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            .fixed_size(egui::vec2(400.0, 190.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    draw_warning_triangle(ui, 36.0);
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("Delete this instance?")
+                                .strong()
+                                .size(16.0),
+                        );
+                        ui.label(format!(
+                            "'{name}' will be removed from the launcher. The game directory on \
+                             disk will NOT be deleted."
+                        ));
+                    });
+                });
+                ui.add_space(14.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                        .clicked()
+                    {
+                        self.instance_delete_pending = None;
+                        if self.instance_store.delete(&name) {
+                            if let Err(e) = self.instance_store.save(&self.home_dir) {
+                                self.instances_error = Some(format!("{e:#}"));
+                                self.notify_error("INSTANCES", format!("{e:#}"));
+                            } else {
+                                self.notify_info(format!("Instance '{name}' deleted"));
+                                if self.launch_instance == name {
+                                    self.launch_instance.clear();
+                                }
+                            }
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.instance_delete_pending = None;
+                    }
+                });
+            });
+    }
+
+    /// Stop/Kill confirmation for a specific instance entry (reuses the
+    /// standard terminate dialog text and the "don't ask again" flag).
+    fn show_instance_terminate_confirmation(
+        &mut self,
+        ctx: &egui::Context,
+        index: usize,
+        kind: TerminateKind,
+    ) {
+        let Some(game) = self.running_games.get(index) else {
+            self.instance_terminate_pending = None;
+            return;
+        };
+        let name = game.instance.clone();
+        let (title, body) = match kind {
+            TerminateKind::Stop => (
+                format!("Stop {name}?"),
+                "The game will be asked to close. It usually exits within a few seconds, but unsaved progress may be lost.",
+            ),
+            TerminateKind::Kill => (
+                format!("Force kill {name}?"),
+                "The game process tree will be terminated immediately. Unsaved progress will be lost.",
+            ),
+        };
+        let screen = ctx.screen_rect();
+
+        egui::Area::new(egui::Id::new("instance_terminate_dim"))
+            .order(egui::Order::Middle)
+            .fixed_pos(screen.left_top())
+            .show(ctx, |ui| {
+                let resp = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
+                if resp.clicked() {
+                    self.instance_terminate_pending = None;
+                }
+            });
+
+        let kill_confirmed = kind == TerminateKind::Kill;
+        egui::Window::new(egui::RichText::new("Confirm").strong())
+            .id(egui::Id::new("instance_terminate_dialog"))
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            .fixed_size(egui::vec2(400.0, 190.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    draw_warning_triangle(ui, 36.0);
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(title).strong().size(16.0));
+                        ui.label(body);
+                    });
+                });
+                ui.add_space(10.0);
+                ui.checkbox(&mut self.terminate_dont_ask, "Don't ask again");
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                        .clicked()
+                    {
+                        self.instance_terminate_pending = None;
+                        if self.terminate_dont_ask {
+                            match kind {
+                                TerminateKind::Stop => self.settings.confirm_stop = false,
+                                TerminateKind::Kill => self.settings.confirm_kill = false,
+                            }
+                            self.save_settings();
+                        }
+                        // The game may have exited while the dialog was open.
+                        let idx = self
+                            .running_games
+                            .iter()
+                            .position(|g| g.running.load(Ordering::SeqCst))
+                            .unwrap_or(index);
+                        if kill_confirmed {
+                            self.kill_instance_pid(idx);
+                        } else {
+                            self.stop_instance_pid(idx);
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.instance_terminate_pending = None;
+                    }
                 });
             });
     }
