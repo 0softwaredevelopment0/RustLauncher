@@ -2198,7 +2198,7 @@ impl App {
             if ui
                 .add_enabled(
                     play_enabled,
-                    egui::Button::new(format!("{}  Play", icons::PLAY_ARROW)),
+                    egui::Button::new(format!("{}  Launch", icons::PLAY_ARROW)),
                 )
                 .clicked()
             {
