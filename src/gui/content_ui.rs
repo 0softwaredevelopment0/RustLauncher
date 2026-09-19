@@ -386,8 +386,13 @@ impl App {
                     ui.vertical(|ui| {
                         ui.heading(&item.title);
                         ui.weak(format!(
-                            "by {} · ↓ {} · ♥ {} · [{}]",
-                            item.author, item.downloads, item.follows, item.license
+                            "by {} · {} {} · {} {} · [{}]",
+                            item.author,
+                            icons::ARROW_DOWNWARD,
+                            item.downloads,
+                            icons::FAVORITE,
+                            item.follows,
+                            item.license
                         ));
                     });
                 });

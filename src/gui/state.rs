@@ -12,6 +12,7 @@ use crate::accounts::AccountStore;
 use crate::auth::AccountKind;
 use crate::content;
 use crate::diagnostics;
+use crate::icons;
 use crate::instances;
 use crate::logs::SessionLog;
 use crate::news::NewsItem;
@@ -172,14 +173,14 @@ pub enum VersionSort {
 }
 
 impl VersionSort {
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> String {
         match self {
-            VersionSort::Newest => "Newest",
-            VersionSort::Number => "By number",
-            VersionSort::ReleaseDate => "By release date",
-            VersionSort::LoaderType => "By loader type",
-            VersionSort::Alphabetical => "A → Z",
-            VersionSort::AlphabeticalReverse => "Z → A",
+            VersionSort::Newest => "Newest".to_string(),
+            VersionSort::Number => format!("Number {}", icons::ARROW_DOWNWARD),
+            VersionSort::ReleaseDate => "Release date".to_string(),
+            VersionSort::LoaderType => "Loader type".to_string(),
+            VersionSort::Alphabetical => format!("A {} Z", icons::ARROW_FORWARD),
+            VersionSort::AlphabeticalReverse => format!("Z {} A", icons::ARROW_FORWARD),
         }
     }
 }

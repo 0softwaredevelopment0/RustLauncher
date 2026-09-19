@@ -226,7 +226,10 @@ impl App {
                     .collect();
                 match crate::jvm::validate_jvm_args(&flags) {
                     Ok(()) => {
-                        ui.colored_label(egui::Color32::LIGHT_GREEN, "✓ heap flags present");
+                        ui.colored_label(
+                            egui::Color32::LIGHT_GREEN,
+                            format!("{} heap flags present", icons::CHECK),
+                        );
                     }
                     Err(e) => {
                         ui.colored_label(egui::Color32::LIGHT_RED, e);

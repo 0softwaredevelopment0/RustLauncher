@@ -35,6 +35,11 @@ pub const KILL: &str = "\u{e14c}"; // cancel
 pub const FOLDER: &str = "\u{e2c8}"; // folder
 pub const CHECK_CIRCLE: &str = "\u{e86c}"; // check_circle
 pub const CHEVRON_RIGHT: &str = "\u{e5cc}"; // chevron_right
+pub const ARROW_UPWARD: &str = "\u{e5d8}"; // arrow_upward
+pub const ARROW_DOWNWARD: &str = "\u{e5db}"; // arrow_downward
+pub const ARROW_FORWARD: &str = "\u{e5c8}"; // arrow_forward
+pub const FAVORITE: &str = "\u{e87d}"; // favorite (heart)
+pub const CHECK: &str = "\u{e5ca}"; // check
 
 /// All icon constants, used by tests.
 #[cfg(test)]
@@ -58,6 +63,11 @@ pub const ALL_ICONS: &[&str] = &[
     FOLDER,
     CHECK_CIRCLE,
     CHEVRON_RIGHT,
+    ARROW_UPWARD,
+    ARROW_DOWNWARD,
+    ARROW_FORWARD,
+    FAVORITE,
+    CHECK,
 ];
 
 /// Install the icon font into the egui context (idempotent). Call once at

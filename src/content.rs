@@ -574,14 +574,14 @@ pub enum VersionSort {
 }
 
 impl VersionSort {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            VersionSort::Newest => "Newest",
-            VersionSort::Oldest => "Oldest",
-            VersionSort::NumberDesc => "Number ↓",
-            VersionSort::NumberAsc => "Number ↑",
-            VersionSort::NameAZ => "A → Z",
-            VersionSort::NameZA => "Z → A",
+            VersionSort::Newest => "Newest".to_string(),
+            VersionSort::Oldest => "Oldest".to_string(),
+            VersionSort::NumberDesc => format!("Number {}", crate::icons::ARROW_DOWNWARD),
+            VersionSort::NumberAsc => format!("Number {}", crate::icons::ARROW_UPWARD),
+            VersionSort::NameAZ => format!("A {} Z", crate::icons::ARROW_FORWARD),
+            VersionSort::NameZA => format!("Z {} A", crate::icons::ARROW_FORWARD),
         }
     }
 
