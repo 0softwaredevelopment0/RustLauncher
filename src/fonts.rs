@@ -11,7 +11,9 @@ use std::sync::OnceLock;
 use crate::icons;
 
 /// Upper bound on how many system CJK faces to load, to bound memory use.
-const MAX_CJK_FONTS: usize = 2;
+/// Windows ships separate faces for Chinese/Japanese (YaHei, MS Gothic) and
+/// Korean (Malgun), so three are needed to cover every CJK UI language.
+const MAX_CJK_FONTS: usize = 3;
 
 static INSTALL: OnceLock<()> = OnceLock::new();
 
@@ -147,6 +149,7 @@ mod tests {
         install(&ctx);
         let id = egui::FontId::proportional(14.0);
         let found = std::cell::Cell::new(false);
+        let found_ko = std::cell::Cell::new(false);
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             ctx.fonts(|fonts| {
                 let _ = fonts.layout_no_wrap(
@@ -155,12 +158,18 @@ mod tests {
                     egui::Color32::WHITE,
                 );
                 found.set(fonts.has_glyphs(&id, "中文"));
+                found_ko.set(fonts.has_glyphs(&id, "한국어"));
             });
         });
         // When a CJK face was actually loaded, the glyphs must resolve
         // (a tofu-square regression would make this false).
         if !cjk_fonts().is_empty() {
             assert!(found.get(), "CJK fallback loaded but glyphs are missing");
+        }
+        // Windows ships Malgun Gothic, which the candidate list loads, so
+        // Korean must resolve there too.
+        if cfg!(target_os = "windows") {
+            assert!(found_ko.get(), "Korean glyphs are missing on Windows");
         }
     }
 }

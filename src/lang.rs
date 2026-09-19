@@ -13,6 +13,7 @@ pub mod es;
 pub mod fr;
 pub mod it;
 pub mod ja;
+pub mod ko;
 pub mod pl;
 pub mod pt;
 pub mod ru;
@@ -36,10 +37,11 @@ pub enum Language {
     Turkish,
     Chinese,
     Japanese,
+    Korean,
 }
 
 impl Language {
-    pub const ALL: [Language; 12] = [
+    pub const ALL: [Language; 13] = [
         Language::English,
         Language::Russian,
         Language::German,
@@ -52,6 +54,7 @@ impl Language {
         Language::Turkish,
         Language::Chinese,
         Language::Japanese,
+        Language::Korean,
     ];
 
     /// Native name shown in the language picker.
@@ -69,6 +72,7 @@ impl Language {
             Language::Turkish => "Türkçe",
             Language::Chinese => "中文",
             Language::Japanese => "日本語",
+            Language::Korean => "한국어",
         }
     }
 }
@@ -89,6 +93,7 @@ pub fn tr(lang: Language, key: &str) -> &str {
         Language::Turkish => tr_::get(key).unwrap_or(key),
         Language::Chinese => zh::get(key).unwrap_or(key),
         Language::Japanese => ja::get(key).unwrap_or(key),
+        Language::Korean => ko::get(key).unwrap_or(key),
     }
 }
 
