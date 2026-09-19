@@ -506,7 +506,7 @@ impl App {
                         icons::VIDEOGAME_ASSET,
                         instance.name,
                         if game.is_some() {
-                            format!("  ● {}", tr(lang, "running"))
+                            format!("  {} {}", icons::FIBER_MANUAL_RECORD, tr(lang, "running"))
                         } else {
                             String::new()
                         }

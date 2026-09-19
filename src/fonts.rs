@@ -15,45 +15,45 @@ use crate::icons;
 /// Korean (Malgun), so three are needed to cover every CJK UI language.
 const MAX_CJK_FONTS: usize = 3;
 
-static INSTALL: OnceLock<()> = OnceLock::new();
+/// Cache of the (expensive) system CJK font reads. The definitions are still
+/// applied per context, so several egui contexts each get the fallbacks.
+static CJK_FONTS: OnceLock<Vec<(String, egui::FontData)>> = OnceLock::new();
 
-/// Install the launcher fonts into the egui context (idempotent). Call once
-/// at startup, before the first frame is drawn.
+/// Install the launcher fonts into the egui context. Call once at startup,
+/// before the first frame is drawn.
 pub fn install(ctx: &egui::Context) {
-    INSTALL.get_or_init(|| {
-        let mut fonts = egui::FontDefinitions::default();
+    let mut fonts = egui::FontDefinitions::default();
 
-        // Material Icons: appended as a fallback so any glyph missing from
-        // the default fonts (i.e. every icon codepoint) falls through. The
-        // atlas only rasterizes glyphs actually drawn, so embedding the full
-        // font costs ~350 KiB of binary size and nothing at runtime.
-        fonts.font_data.insert(
-            "material-icons".to_owned(),
-            egui::FontData::from_static(icons::FONT_BYTES),
-        );
-        let mut fallbacks = vec!["material-icons".to_owned()];
+    // Material Icons: appended as a fallback so any glyph missing from
+    // the default fonts (i.e. every icon codepoint) falls through. The
+    // atlas only rasterizes glyphs actually drawn, so embedding the full
+    // font costs ~350 KiB of binary size and nothing at runtime.
+    fonts.font_data.insert(
+        "material-icons".to_owned(),
+        egui::FontData::from_static(icons::FONT_BYTES),
+    );
+    let mut fallbacks = vec!["material-icons".to_owned()];
 
-        // System CJK fallback(s), in preference order.
-        for (key, data) in cjk_fonts() {
-            fonts.font_data.insert(key.clone(), data);
-            fallbacks.push(key);
-        }
+    // System CJK fallback(s), in preference order.
+    for (key, data) in CJK_FONTS.get_or_init(cjk_fonts) {
+        fonts.font_data.insert(key.clone(), data.clone());
+        fallbacks.push(key.clone());
+    }
 
-        // Register the fallbacks for both proportional text and the
-        // monospace console (mods print CJK to stdout too).
-        for family in [
-            egui::FontFamily::Proportional,
-            egui::FontFamily::Monospace,
-        ] {
-            fonts
-                .families
-                .entry(family)
-                .or_default()
-                .extend(fallbacks.iter().cloned());
-        }
+    // Register the fallbacks for both proportional text and the monospace
+    // console (mods print CJK to stdout too).
+    for family in [
+        egui::FontFamily::Proportional,
+        egui::FontFamily::Monospace,
+    ] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .extend(fallbacks.iter().cloned());
+    }
 
-        ctx.set_fonts(fonts);
-    });
+    ctx.set_fonts(fonts);
 }
 
 /// Candidate system font files that cover CJK, in preference order.

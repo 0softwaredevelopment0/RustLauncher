@@ -38,6 +38,7 @@ pub const ARROW_FORWARD: &str = "\u{e5c8}"; // arrow_forward
 pub const FAVORITE: &str = "\u{e87d}"; // favorite (heart)
 pub const CHECK: &str = "\u{e5ca}"; // check
 pub const RESTORE: &str = "\u{e8b3}"; // restore (settings_backup_restore)
+pub const FIBER_MANUAL_RECORD: &str = "\u{e061}"; // fiber_manual_record (status dot)
 
 /// All icon constants, used by tests.
 #[cfg(test)]
@@ -67,6 +68,7 @@ pub const ALL_ICONS: &[&str] = &[
     FAVORITE,
     CHECK,
     RESTORE,
+    FIBER_MANUAL_RECORD,
 ];
 
 #[cfg(test)]
@@ -84,5 +86,29 @@ mod tests {
     fn font_bytes_are_embedded_ttf() {
         // TrueType fonts start with the sfnt version 0x00010000.
         assert_eq!(&FONT_BYTES[..4], &[0x00, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn every_icon_has_a_glyph_in_the_font() {
+        // Guards against a typo'd codepoint rendering as a tofu box: install
+        // the fonts and check the embedded icon font actually has each glyph.
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx);
+        let id = egui::FontId::proportional(16.0);
+        let missing = std::cell::RefCell::new(Vec::new());
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            ctx.fonts(|fonts| {
+                for icon in ALL_ICONS {
+                    if !fonts.has_glyph(&id, icon.chars().next().unwrap()) {
+                        missing.borrow_mut().push(format!("{icon:?}"));
+                    }
+                }
+            });
+        });
+        assert!(
+            missing.borrow().is_empty(),
+            "icons without a glyph: {}",
+            missing.borrow().join(", ")
+        );
     }
 }
