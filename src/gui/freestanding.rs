@@ -232,7 +232,8 @@ impl App {
     }
 
     pub(crate) fn fetch_news(&mut self) {
-        let url = self.settings.news_url.trim().to_string();
+        let base = self.settings.news_url.trim().to_string();
+        let url = format!("{}/api/news", base.trim_end_matches('/'));
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
