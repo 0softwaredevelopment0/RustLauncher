@@ -141,6 +141,162 @@ impl FileLogMode {
     }
 }
 
+/// A built-in look, or `Custom` once the user tweaks any color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ThemePreset {
+    White,
+    Light,
+    Gray,
+    #[default]
+    Dark,
+    Black,
+    Custom,
+}
+
+impl ThemePreset {
+    pub const ALL: [ThemePreset; 6] = [
+        ThemePreset::White,
+        ThemePreset::Light,
+        ThemePreset::Gray,
+        ThemePreset::Dark,
+        ThemePreset::Black,
+        ThemePreset::Custom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemePreset::White => "White",
+            ThemePreset::Light => "Light",
+            ThemePreset::Gray => "Gray",
+            ThemePreset::Dark => "Dark",
+            ThemePreset::Black => "Black",
+            ThemePreset::Custom => "Custom",
+        }
+    }
+}
+
+/// How the window background is painted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum BackgroundMode {
+    /// A single flat color.
+    #[default]
+    Color,
+    /// A vertical gradient (`bg_top` → `bg_bottom`).
+    Gradient,
+    /// A photo from `bg_image` (PNG/JPG), stretched to cover the window.
+    Image,
+}
+
+impl BackgroundMode {
+    pub const ALL: [BackgroundMode; 3] = [
+        BackgroundMode::Color,
+        BackgroundMode::Gradient,
+        BackgroundMode::Image,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BackgroundMode::Color => "Color",
+            BackgroundMode::Gradient => "Gradient",
+            BackgroundMode::Image => "Image",
+        }
+    }
+}
+
+/// Full UI theme: background (flat color, gradient or photo), button and
+/// accent colors. Colors are stored as sRGB triplets (the color picker
+/// edits them with the full palette); `preset` only remembers which
+/// built-in look they came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Theme {
+    pub preset: ThemePreset,
+    /// Dark widget base (dark text on light off). Presets set it; in
+    /// Custom mode it is a manual checkbox.
+    pub dark_base: bool,
+    pub background: BackgroundMode,
+    /// Flat background color (`BackgroundMode::Color`).
+    pub bg_color: [u8; 3],
+    /// Gradient stops (`BackgroundMode::Gradient`).
+    pub bg_top: [u8; 3],
+    pub bg_bottom: [u8; 3],
+    /// Photo path (`BackgroundMode::Image`).
+    pub bg_image: String,
+    /// Normal button/control fill.
+    pub button: [u8; 3],
+    /// Selection, links and pressed-button fill.
+    pub accent: [u8; 3],
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self::from_preset(ThemePreset::Dark)
+    }
+}
+
+impl Theme {
+    pub fn dark() -> Self {
+        Self::from_preset(ThemePreset::Dark)
+    }
+
+    pub fn light() -> Self {
+        Self::from_preset(ThemePreset::Light)
+    }
+
+    /// The full theme for a built-in preset.
+    pub fn from_preset(preset: ThemePreset) -> Self {
+        let (dark_base, bg, button, accent) = match preset {
+            ThemePreset::White => (false, [255, 255, 255], [225, 228, 232], [25, 118, 210]),
+            ThemePreset::Light => (false, [242, 242, 242], [220, 223, 227], [25, 118, 210]),
+            ThemePreset::Gray => (true, [110, 110, 110], [140, 140, 140], [255, 176, 66]),
+            ThemePreset::Dark => (true, [30, 30, 30], [60, 60, 60], [100, 181, 246]),
+            ThemePreset::Black => (true, [0, 0, 0], [32, 32, 32], [0, 200, 255]),
+            ThemePreset::Custom => {
+                return Self {
+                    preset: ThemePreset::Custom,
+                    ..Self::from_preset(ThemePreset::Dark)
+                };
+            }
+        };
+        Self {
+            preset,
+            dark_base,
+            background: BackgroundMode::Color,
+            bg_color: bg,
+            bg_top: bg,
+            bg_bottom: bg,
+            bg_image: String::new(),
+            button,
+            accent,
+        }
+    }
+
+    pub fn bg_color32(&self) -> egui::Color32 {
+        let [r, g, b] = self.bg_color;
+        egui::Color32::from_rgb(r, g, b)
+    }
+
+    pub fn bg_top32(&self) -> egui::Color32 {
+        let [r, g, b] = self.bg_top;
+        egui::Color32::from_rgb(r, g, b)
+    }
+
+    pub fn bg_bottom32(&self) -> egui::Color32 {
+        let [r, g, b] = self.bg_bottom;
+        egui::Color32::from_rgb(r, g, b)
+    }
+
+    pub fn button32(&self) -> egui::Color32 {
+        let [r, g, b] = self.button;
+        egui::Color32::from_rgb(r, g, b)
+    }
+
+    pub fn accent32(&self) -> egui::Color32 {
+        let [r, g, b] = self.accent;
+        egui::Color32::from_rgb(r, g, b)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -171,7 +327,13 @@ pub struct Settings {
     pub file_log: FileLogMode,
     /// How much of the game output the Console tab shows.
     pub console_log_mode: ConsoleMode,
-    pub dark_theme: bool,
+    /// Full UI theme (background, buttons, accent). Replaces the old
+    /// `dark_theme` checkbox.
+    pub theme: Theme,
+    /// Legacy flag from pre-theme builds. Migrated to [`Theme`] on load,
+    /// never written back.
+    #[serde(default, skip_serializing)]
+    pub dark_theme: Option<bool>,
     /// Ask for confirmation before force-killing the game (Kill button).
     pub confirm_kill: bool,
     /// Ask for confirmation before politely stopping the game (Stop button).
@@ -196,7 +358,8 @@ impl Default for Settings {
             auto_connect: false,
             file_log: FileLogMode::All,
             console_log_mode: ConsoleMode::All,
-            dark_theme: true,
+            theme: Theme::default(),
+            dark_theme: None,
             confirm_kill: true,
             confirm_stop: true,
             news_url: "https://rizer001.opik.net".to_string(),
@@ -219,6 +382,15 @@ impl Settings {
                     if settings.news_url.trim_end_matches('/') == OLD_BROKEN_NEWS_URL {
                         settings.news_url = Settings::default().news_url;
                     }
+                    // Pre-theme configs only have the `dark_theme` checkbox:
+                    // map it onto the matching preset (a config that already
+                    // carries a theme keeps it).
+                    if settings.theme == Theme::default() {
+                        if let Some(dark) = settings.dark_theme {
+                            settings.theme = if dark { Theme::dark() } else { Theme::light() };
+                        }
+                    }
+                    settings.dark_theme = None;
                     settings
                 }
                 Err(e) => {
@@ -257,7 +429,8 @@ mod tests {
         assert_eq!(s.java_args, jvm::DEFAULT_JVM_ARGS);
         assert!(!s.use_custom_java);
         assert_eq!(s.game_width, 854);
-        assert!(s.dark_theme);
+        assert_eq!(s.theme.preset, ThemePreset::Dark);
+        assert!(s.theme.dark_base);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -346,5 +519,64 @@ mod tests {
         assert!(FileLogMode::WarningsAndErrors.allows(err));
         assert!(FileLogMode::WarningsAndErrors.allows(warn));
         assert!(!FileLogMode::WarningsAndErrors.allows(plain));
+    }
+
+    #[test]
+    fn theme_presets_have_sane_bases() {
+        assert!(Theme::from_preset(ThemePreset::White).dark_base == false);
+        assert!(Theme::from_preset(ThemePreset::Light).dark_base == false);
+        for preset in [
+            ThemePreset::Gray,
+            ThemePreset::Dark,
+            ThemePreset::Black,
+        ] {
+            assert!(Theme::from_preset(preset).dark_base, "{preset:?}");
+        }
+        for preset in ThemePreset::ALL {
+            let theme = Theme::from_preset(preset);
+            assert_eq!(theme.preset, preset);
+            assert_eq!(theme.background, BackgroundMode::Color);
+        }
+        assert_eq!(Theme::default().preset, ThemePreset::Dark);
+    }
+
+    #[test]
+    fn legacy_dark_theme_flag_migrates_to_preset() {
+        for (flag, preset) in [(true, ThemePreset::Dark), (false, ThemePreset::Light)] {
+            let dir = tmp_home(&format!("darkflag-{flag}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("config.json"),
+                format!(r#"{{"dark_theme": {flag}}}"#),
+            )
+            .unwrap();
+            let s = Settings::load(&dir);
+            assert_eq!(s.theme.preset, preset, "dark_theme={flag}");
+            assert_eq!(s.theme, Theme::from_preset(preset));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn theme_roundtrips_through_save_load() {
+        let dir = tmp_home("theme");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = Settings::default();
+        s.theme = Theme {
+            preset: ThemePreset::Custom,
+            dark_base: true,
+            background: BackgroundMode::Gradient,
+            bg_color: [10, 20, 30],
+            bg_top: [0, 0, 0],
+            bg_bottom: [255, 255, 255],
+            bg_image: "C:/pics/bg.jpg".into(),
+            button: [1, 2, 3],
+            accent: [4, 5, 6],
+        };
+        s.save(&dir).unwrap();
+        let loaded = Settings::load(&dir);
+        assert_eq!(loaded.theme, s.theme);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

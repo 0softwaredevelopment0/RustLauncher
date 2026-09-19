@@ -276,7 +276,123 @@ impl App {
                 .small()
                 .color(egui::Color32::GRAY),
             );
-            ui.checkbox(&mut self.settings.dark_theme, "Dark theme");
+            ui.strong("Customization");
+            ui.horizontal(|ui| {
+                ui.label("Theme:");
+                let mut preset = self.settings.theme.preset;
+                egui::ComboBox::from_id_salt("theme_preset")
+                    .selected_text(preset.label())
+                    .width(110.0)
+                    .show_ui(ui, |ui| {
+                        for p in settings::ThemePreset::ALL {
+                            ui.selectable_value(&mut preset, p, p.label());
+                        }
+                    });
+                if preset != self.settings.theme.preset {
+                    self.settings.theme = settings::Theme::from_preset(preset);
+                    // Drop the decoded photo so a later Image mode reloads it.
+                    self.bg_texture = None;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Background:");
+                for mode in settings::BackgroundMode::ALL {
+                    if ui
+                        .radio_value(&mut self.settings.theme.background, mode, mode.label())
+                        .changed()
+                    {
+                        self.settings.theme.preset = settings::ThemePreset::Custom;
+                    }
+                }
+            });
+            match self.settings.theme.background {
+                settings::BackgroundMode::Color => {
+                    ui.horizontal(|ui| {
+                        ui.label("Color:");
+                        if ui
+                            .color_edit_button_srgb(&mut self.settings.theme.bg_color)
+                            .changed()
+                        {
+                            self.settings.theme.preset = settings::ThemePreset::Custom;
+                        }
+                    });
+                }
+                settings::BackgroundMode::Gradient => {
+                    ui.horizontal(|ui| {
+                        ui.label("Top:");
+                        if ui
+                            .color_edit_button_srgb(&mut self.settings.theme.bg_top)
+                            .changed()
+                        {
+                            self.settings.theme.preset = settings::ThemePreset::Custom;
+                        }
+                        ui.label("Bottom:");
+                        if ui
+                            .color_edit_button_srgb(&mut self.settings.theme.bg_bottom)
+                            .changed()
+                        {
+                            self.settings.theme.preset = settings::ThemePreset::Custom;
+                        }
+                    });
+                }
+                settings::BackgroundMode::Image => {
+                    ui.horizontal(|ui| {
+                        ui.label("Image:");
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(&mut self.settings.theme.bg_image)
+                                .desired_width(280.0),
+                        );
+                        if edit.changed() {
+                            self.settings.theme.preset = settings::ThemePreset::Custom;
+                        }
+                        if ui.button("…").clicked() {
+                            if let Some(file) = rfd::FileDialog::new()
+                                .add_filter("Image", &["png", "jpg", "jpeg"])
+                                .pick_file()
+                            {
+                                self.settings.theme.bg_image =
+                                    file.to_string_lossy().to_string();
+                                self.settings.theme.preset = settings::ThemePreset::Custom;
+                            }
+                        }
+                    });
+                    ui.label(
+                        egui::RichText::new("PNG or JPG photo, stretched to cover the window.")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.label("Buttons:");
+                if ui
+                    .color_edit_button_srgb(&mut self.settings.theme.button)
+                    .changed()
+                {
+                    self.settings.theme.preset = settings::ThemePreset::Custom;
+                }
+                ui.label("Accent:");
+                if ui
+                    .color_edit_button_srgb(&mut self.settings.theme.accent)
+                    .changed()
+                {
+                    self.settings.theme.preset = settings::ThemePreset::Custom;
+                }
+                if ui
+                    .checkbox(&mut self.settings.theme.dark_base, "Dark base")
+                    .changed()
+                {
+                    self.settings.theme.preset = settings::ThemePreset::Custom;
+                }
+            });
+            ui.label(
+                egui::RichText::new(
+                    "Accent colors selection, links and pressed buttons. \
+                     Any manual tweak switches the theme to Custom.",
+                )
+                .small()
+                .color(egui::Color32::GRAY),
+            );
 
             ui.strong("News");
             ui.horizontal(|ui| {
@@ -356,6 +472,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.apply_pending_jobs();
         self.sync_visuals(ctx);
+        self.paint_background(ctx);
         self.tick_toasts();
 
         // Repaint while the game runs or a download is in progress so the
@@ -498,11 +615,11 @@ impl App {
                         .clicked()
                     {
                         self.settings_reset_pending = false;
-                        let dark_theme = self.settings.dark_theme;
+                        let theme = self.settings.theme.clone();
                         self.settings = settings::Settings::default();
                         // Keep the visual choice; the reset targets functional
                         // settings, not the theme the user picked.
-                        self.settings.dark_theme = dark_theme;
+                        self.settings.theme = theme;
                         if let Err(e) = self.settings.save(&self.home_dir) {
                             self.notify_error("SETTINGS", format!("failed to save: {e:#}"));
                         }

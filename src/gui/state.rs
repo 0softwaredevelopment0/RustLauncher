@@ -566,6 +566,10 @@ pub struct App {
 
     /// Reset-to-defaults confirmation dialog is open.
     pub settings_reset_pending: bool,
+    /// Cached background photo texture: the path it was decoded from plus
+    /// the texture (`None` = the photo failed to load, fall back to flat
+    /// color). Reloaded only when the path changes.
+    pub(crate) bg_texture: Option<(String, Option<egui::TextureHandle>)>,
 }
 
 /// Which destructive action the confirmation dialog is guarding.
