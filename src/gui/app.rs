@@ -36,7 +36,7 @@ impl App {
             self.news_selected = None;
         }
 
-        // Card grid.
+        // Cards stack vertically, one per row, and scroll downwards.
         ui.heading(tr(lang, "News"));
         ui.add_space(4.0);
         if ui.button(tr(lang, "Refresh")).clicked() {
@@ -55,30 +55,24 @@ impl App {
                     tr_fmt(lang, "Feed unavailable: {0}", &[&e.to_string()]),
                 );
                 ui.add_space(4.0);
-                for item in news::fallback_news(lang) {
-                    self.news_card(ui, &item, None);
-                }
+                let fallback = news::fallback_news(lang);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for item in &fallback {
+                            self.news_card(ui, item, None);
+                        }
+                    });
             }
             Some(Ok(items)) => {
                 let items = items.clone();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    egui::Grid::new("news_grid")
-                        .num_columns(2)
-                        .min_col_width((ui.available_width() / 2.0).max(220.0))
-                        .spacing([12.0, 12.0])
-                        .show(ui, |ui| {
-                            for (idx, item) in items.iter().enumerate() {
-                                self.news_card(ui, item, Some(idx));
-                                if idx % 2 == 1 {
-                                    ui.end_row();
-                                }
-                            }
-                            if items.len() % 2 == 1 {
-                                ui.label("");
-                                ui.end_row();
-                            }
-                        });
-                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (idx, item) in items.iter().enumerate() {
+                            self.news_card(ui, item, Some(idx));
+                        }
+                    });
             }
         }
     }
@@ -96,6 +90,8 @@ impl App {
 
         let resp = frame
             .show(ui, |ui| {
+                // Fill the full width so the single-column cards line up.
+                ui.set_min_width(ui.available_width());
                 // Top row: author + date.
                 ui.horizontal(|ui| {
                     let name = item.author_name(lang);
