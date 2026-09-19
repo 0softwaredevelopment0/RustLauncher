@@ -563,6 +563,9 @@ pub struct App {
     /// Launcher error log (logs/launcher-N.log), written at startup and on
     /// every launcher error so toasts can show its tail.
     pub(crate) launcher_log: Option<SessionLog>,
+
+    /// Reset-to-defaults confirmation dialog is open.
+    pub settings_reset_pending: bool,
 }
 
 /// Which destructive action the confirmation dialog is guarding.

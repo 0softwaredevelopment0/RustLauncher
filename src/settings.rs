@@ -80,6 +80,61 @@ fn line_matches(line: &str, markers: &[&str]) -> bool {
     markers.iter().any(|m| lower.contains(m))
 }
 
+/// What a log FILE captures (launcher log / game log). The Console tab has
+/// its own display filter (`ConsoleMode`); these two are independent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FileLogMode {
+    /// Do not write the file at all.
+    Nothing,
+    /// Only warnings.
+    Warnings,
+    /// Only errors.
+    Errors,
+    /// Warnings and errors.
+    WarningsAndErrors,
+    /// Every line.
+    #[default]
+    All,
+}
+
+impl FileLogMode {
+    pub const ALL: [FileLogMode; 5] = [
+        FileLogMode::Nothing,
+        FileLogMode::Warnings,
+        FileLogMode::Errors,
+        FileLogMode::WarningsAndErrors,
+        FileLogMode::All,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FileLogMode::Nothing => "Nothing",
+            FileLogMode::Warnings => "Warnings",
+            FileLogMode::Errors => "Errors",
+            FileLogMode::WarningsAndErrors => "Warnings + errors",
+            FileLogMode::All => "All",
+        }
+    }
+
+    /// Whether a log line belongs in the file under this mode. Launcher's own
+    /// metadata lines (`[RustLauncher] …`) always pass — they are not game
+    /// output, they are the file's context.
+    pub fn allows(&self, line: &str) -> bool {
+        if line.starts_with("[RustLauncher]") {
+            return true;
+        }
+        match self {
+            FileLogMode::Nothing => false,
+            FileLogMode::All => true,
+            FileLogMode::Errors => line_matches(line, ERROR_MARKERS),
+            FileLogMode::Warnings => line_matches(line, WARNING_MARKERS),
+            FileLogMode::WarningsAndErrors => {
+                line_matches(line, ERROR_MARKERS) || line_matches(line, WARNING_MARKERS)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -104,7 +159,11 @@ pub struct Settings {
     pub connect_server_ip: String,
     pub auto_connect: bool,
     /// Write the game console output to a numbered log file.
-    pub save_console_log: bool,
+    /// What the `logs/launcher-N.log` file captures.
+    pub launcher_file_log: FileLogMode,
+    /// What the `logs/game-N.log` file captures (replaces the old
+    /// boolean `save_console_log`).
+    pub game_file_log: FileLogMode,
     /// How much of the game output the Console tab shows.
     pub console_log_mode: ConsoleMode,
     pub dark_theme: bool,
@@ -130,7 +189,8 @@ impl Default for Settings {
             selected_version: String::new(),
             connect_server_ip: String::new(),
             auto_connect: false,
-            save_console_log: true,
+            launcher_file_log: FileLogMode::All,
+            game_file_log: FileLogMode::All,
             console_log_mode: ConsoleMode::All,
             dark_theme: true,
             confirm_kill: true,
@@ -257,5 +317,25 @@ mod tests {
         assert!(ConsoleMode::ErrorsAndWarnings.allows(warn));
         assert!(!ConsoleMode::ErrorsAndWarnings.allows(plain));
         assert!(!ConsoleMode::Nothing.allows(err));
+    }
+
+    #[test]
+    fn file_log_mode_filters_lines() {
+        let err = "java.lang.RuntimeException: boom";
+        let warn = "[12:00] WARN: low disk space";
+        let plain = "Rendering world chunk 42";
+        let meta = "[RustLauncher] Launching 1.21";
+        assert!(FileLogMode::All.allows(err));
+        assert!(FileLogMode::All.allows(plain));
+        assert!(!FileLogMode::Nothing.allows(err));
+        assert!(FileLogMode::Nothing.allows(meta));
+        assert!(FileLogMode::Errors.allows(err));
+        assert!(!FileLogMode::Errors.allows(warn));
+        assert!(!FileLogMode::Errors.allows(plain));
+        assert!(FileLogMode::Warnings.allows(warn));
+        assert!(!FileLogMode::Warnings.allows(err));
+        assert!(FileLogMode::WarningsAndErrors.allows(err));
+        assert!(FileLogMode::WarningsAndErrors.allows(warn));
+        assert!(!FileLogMode::WarningsAndErrors.allows(plain));
     }
 }

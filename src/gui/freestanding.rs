@@ -20,7 +20,7 @@ use crate::logs::SessionLog;
 use crate::news;
 use crate::notifications::{Toast, ToastKind, Toasts};
 use crate::servers::ServerStore;
-use crate::settings::Settings;
+use crate::settings::{self, Settings};
 use crate::skins;
 use crate::updater::{self};
 use crate::version::{self, Version};
@@ -119,6 +119,7 @@ impl App {
             toasts: Toasts::default(),
             last_frame: None,
             launcher_log: None,
+            settings_reset_pending: false,
         };
         app.accounts.select_saved(&app.settings.username);
         app.refresh_skins();
@@ -405,7 +406,7 @@ impl App {
         self.console = console.clone();
         self.console_seq = 0;
 
-        let save_log = settings.save_console_log;
+        let game_file_log = settings.game_file_log;
         let home_dir = self.home_dir.clone();
 
         running.store(true, Ordering::SeqCst);
@@ -416,7 +417,14 @@ impl App {
         self.spawn_job(
             move || {
                 let result = run_game_process(
-                    &game_dir, &version, &account, &settings, console, save_log, &home_dir, log,
+                    &game_dir,
+                    &version,
+                    &account,
+                    &settings,
+                    console,
+                    game_file_log,
+                    &home_dir,
+                    log,
                     pid,
                 );
                 running.store(false, Ordering::SeqCst);
@@ -462,9 +470,12 @@ impl App {
 
     // ── launcher error log & toasts ──────────────────────
 
-    /// Open `logs/launcher-N.log` for the whole app lifetime; every launcher
-    /// error is written there so error toasts can show its tail.
+    /// Open `logs/launcher-N.log` for the whole app lifetime; the file
+    /// captures what `launcher_file_log` allows (Nothing = no file at all).
     pub(crate) fn start_launcher_log(&mut self) {
+        if self.settings.launcher_file_log == settings::FileLogMode::Nothing {
+            return;
+        }
         match SessionLog::start(&home::logs_dir(&self.home_dir), "launcher") {
             Ok(log) => {
                 log.write(&format!(
@@ -480,9 +491,7 @@ impl App {
     /// Record a launcher error: to the launcher log, console and as a toast.
     pub(crate) fn notify_error(&mut self, code: &str, message: impl std::fmt::Display) {
         let line = format!("[ERROR {code}] {message}");
-        if let Some(log) = &self.launcher_log {
-            log.write(&line);
-        }
+        self.log_launcher_line(&line);
         self.log_console(line.clone());
 
         // The collapsed toast shows the last 3 lines; a click expands the
@@ -504,6 +513,17 @@ impl App {
     /// Push an informational toast (game started/stopped etc.).
     pub(crate) fn notify_info(&mut self, title: impl Into<String>) {
         self.toasts.push(Toast::info(title));
+    }
+
+    /// Write a launcher-side line to the launcher log file, honoring the
+    /// `launcher_file_log` mode.
+    pub(crate) fn log_launcher_line(&self, line: &str) {
+        if !self.settings.launcher_file_log.allows(line) {
+            return;
+        }
+        if let Some(log) = &self.launcher_log {
+            log.write(line);
+        }
     }
 
     /// Advance toast aging; called once per frame.
@@ -816,7 +836,7 @@ pub(crate) fn run_game_process(
     account: &auth::Account,
     settings: &Settings,
     console: Arc<Mutex<Vec<String>>>,
-    save_log: bool,
+    file_log: settings::FileLogMode,
     home_dir: &std::path::Path,
     game_log: Arc<Mutex<Option<SessionLog>>>,
     game_pid: Arc<Mutex<Option<u32>>>,
@@ -846,7 +866,7 @@ pub(crate) fn run_game_process(
         },
     )?;
 
-    if save_log {
+    if file_log != settings::FileLogMode::Nothing {
         match SessionLog::start(&home::logs_dir(home_dir), "game") {
             Ok(log) => {
                 *game_log.lock().unwrap_or_else(|e| e.into_inner()) = Some(log);
@@ -866,7 +886,7 @@ pub(crate) fn run_game_process(
         ),
     );
 
-    let code = spawn_and_stream(&plan, console, game_pid)?;
+    let code = spawn_and_stream(&plan, console, game_pid, game_log.clone(), file_log)?;
     *game_log.lock().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(code)
 }
@@ -875,6 +895,8 @@ pub(crate) fn spawn_and_stream(
     plan: &LaunchPlan,
     console: Arc<Mutex<Vec<String>>>,
     game_pid: Arc<Mutex<Option<u32>>>,
+    game_log: Arc<Mutex<Option<SessionLog>>>,
+    file_log: settings::FileLogMode,
 ) -> Result<i32> {
     use std::io::BufRead;
     use std::process::{Command, Stdio};
@@ -895,11 +917,21 @@ pub(crate) fn spawn_and_stream(
 
     let drain = |stream: Box<dyn std::io::Read + Send>| {
         let console = console.clone();
+        let log_handle = game_log.clone();
         std::thread::spawn(move || {
             for line in std::io::BufReader::new(stream)
                 .lines()
                 .map_while(Result::ok)
             {
+                if file_log.allows(&line) {
+                    if let Some(log) = log_handle
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .as_ref()
+                    {
+                        log.write(&line);
+                    }
+                }
                 push_line(&console, line);
             }
         });

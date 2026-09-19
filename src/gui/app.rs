@@ -252,15 +252,42 @@ impl App {
                 });
             });
 
-            ui.strong("Launcher");
-            ui.checkbox(
-                &mut self.settings.save_console_log,
-                "Save game console to logs/",
+            ui.strong("Logs");
+            ui.horizontal(|ui| {
+                ui.label("Launcher log file:");
+                egui::ComboBox::from_id_salt("launcher_file_log")
+                    .selected_text(self.settings.launcher_file_log.label())
+                    .width(170.0)
+                    .show_ui(ui, |ui| {
+                        for mode in settings::FileLogMode::ALL {
+                            ui.selectable_value(
+                                &mut self.settings.launcher_file_log,
+                                mode,
+                                mode.label(),
+                            );
+                        }
+                    });
+                ui.label("Game log file:");
+                egui::ComboBox::from_id_salt("game_file_log")
+                    .selected_text(self.settings.game_file_log.label())
+                    .width(170.0)
+                    .show_ui(ui, |ui| {
+                        for mode in settings::FileLogMode::ALL {
+                            ui.selectable_value(
+                                &mut self.settings.game_file_log,
+                                mode,
+                                mode.label(),
+                            );
+                        }
+                    });
+            });
+            ui.label(
+                egui::RichText::new(
+                    "What the logs/ files capture. The Console tab display filter lives on the Console tab.",
+                )
+                .small()
+                .color(egui::Color32::GRAY),
             );
-            ui.strong("Console log mode");
-            for mode in settings::ConsoleMode::ALL {
-                ui.radio_value(&mut self.settings.console_log_mode, mode, mode.label());
-            }
             ui.checkbox(&mut self.settings.dark_theme, "Dark theme");
 
             ui.strong("News");
@@ -277,11 +304,19 @@ impl App {
             });
         });
         ui.separator();
-        if ui.button("Save settings").clicked() {
-            self.save_settings();
-            self.reload_versions();
-            self.play_status = "Settings saved".into();
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Save settings").clicked() {
+                self.save_settings();
+                self.reload_versions();
+                self.play_status = "Settings saved".into();
+            }
+            if ui
+                .button(format!("{} Reset settings", icons::RESTORE))
+                .clicked()
+            {
+                self.settings_reset_pending = true;
+            }
+        });
     }
 
     pub(crate) fn ui_diagnostics(&mut self, ui: &mut egui::Ui) {
@@ -405,6 +440,10 @@ impl eframe::App for App {
             self.show_instance_terminate_confirmation(ctx, &pid_handle, kind);
         }
 
+        if self.settings_reset_pending {
+            self.show_settings_reset_confirmation(ctx);
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| match self.screen {
             Screen::General => self.ui_general(ui),
             Screen::Console => self.ui_console(ui),
@@ -418,6 +457,75 @@ impl eframe::App for App {
             Screen::Settings => self.ui_settings(ui),
             Screen::Diagnostics => self.ui_diagnostics(ui),
         });
+    }
+}
+
+// ── settings reset confirmation ───────────────────────────────
+
+impl App {
+    /// "Reset all settings to defaults?" dialog.
+    fn show_settings_reset_confirmation(&mut self, ctx: &egui::Context) {
+        let screen = ctx.screen_rect();
+
+        egui::Area::new(egui::Id::new("settings_reset_dim"))
+            .order(egui::Order::Middle)
+            .fixed_pos(screen.left_top())
+            .show(ctx, |ui| {
+                let resp = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
+                if resp.clicked() {
+                    self.settings_reset_pending = false;
+                }
+            });
+
+        egui::Window::new(egui::RichText::new("Confirm").strong())
+            .id(egui::Id::new("settings_reset_dialog"))
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            .fixed_size(egui::vec2(400.0, 190.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    super::toast_ui::draw_warning_triangle(ui, 36.0);
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("Reset all settings?")
+                                .strong()
+                                .size(16.0),
+                        );
+                        ui.label(
+                            "Every setting returns to its default value. Instances, \
+                             accounts and downloaded files are not affected.",
+                        );
+                    });
+                });
+                ui.add_space(14.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                        .clicked()
+                    {
+                        self.settings_reset_pending = false;
+                        let dark_theme = self.settings.dark_theme;
+                        self.settings = settings::Settings::default();
+                        // Keep the visual choice; the reset targets functional
+                        // settings, not the theme the user picked.
+                        self.settings.dark_theme = dark_theme;
+                        if let Err(e) = self.settings.save(&self.home_dir) {
+                            self.notify_error("SETTINGS", format!("failed to save: {e:#}"));
+                        }
+                        self.reload_versions();
+                        self.play_status = "Settings reset to defaults".into();
+                        self.notify_info("Settings reset to defaults");
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.settings_reset_pending = false;
+                    }
+                });
+            });
     }
 }
 

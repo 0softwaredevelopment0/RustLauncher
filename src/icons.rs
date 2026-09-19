@@ -40,6 +40,7 @@ pub const ARROW_DOWNWARD: &str = "\u{e5db}"; // arrow_downward
 pub const ARROW_FORWARD: &str = "\u{e5c8}"; // arrow_forward
 pub const FAVORITE: &str = "\u{e87d}"; // favorite (heart)
 pub const CHECK: &str = "\u{e5ca}"; // check
+pub const RESTORE: &str = "\u{e8b3}"; // restore (settings_backup_restore)
 
 /// All icon constants, used by tests.
 #[cfg(test)]
@@ -68,6 +69,7 @@ pub const ALL_ICONS: &[&str] = &[
     ARROW_FORWARD,
     FAVORITE,
     CHECK,
+    RESTORE,
 ];
 
 /// Install the icon font into the egui context (idempotent). Call once at
