@@ -1,7 +1,6 @@
 # RustLauncher
 
-A fast, native Minecraft launcher written in Rust — the successor of the
-Java/JavaFX PowerLaunch.
+A fast, native Minecraft launcher written in Rust.
 
 ![status](https://img.shields.io/badge/status-beta-orange)
 
@@ -33,8 +32,8 @@ Java/JavaFX PowerLaunch.
 - **Accounts**: Offline (Argon2id-hashed password in the launcher DB),
   Ely.by and Mojang/Microsoft (device-code flow); removal re-authenticates.
 - **Servers**: import/export Minecraft's `servers.dat` **without losing
-  per-server icons** (the Java version rewrote the file from scratch and
-  dropped every unknown NBT tag), plus a TCP status probe.
+  per-server icons** — the NBT merge keeps every tag it doesn't touch,
+  so per-server icons survive round trips, plus a TCP status probe.
 - **Skins**: download from Crafatar by nickname, import local 64x32/64x64
   PNGs, in-app preview.
 - **Profiles**: named settings snapshots (JSON), create/switch/delete.
@@ -123,23 +122,21 @@ home (`RUSTLAUNCHER_HOME` overrides it; otherwise the OS data directory +
 (Windows) or `~/.rustlauncher`; override it in Settings, `--game-dir`, or by
 creating an instance with its own directory.
 
-## Differences from PowerLaunch
+## Design highlights
 
-| Java PowerLaunch            | RustLauncher                          |
-|-----------------------------|---------------------------------------|
-| JavaFX controller, 4300 LoC | egui GUI, native binary               |
-| SQLite settings/accounts    | typed JSON files (config/accounts/…)  |
-| Manual JSON string search   | serde struct parsing                  |
-| Could only list remote versions | Full install with SHA-1 checks; one merged local+remote version list |
-| servers.dat rewrite lost icons | NBT-preserving merge               |
-| 5-minute kill timer in CLI  | Waits as long as the game runs        |
-| Launcher JRE used for game  | Required Java major auto-selected     |
-| No instance concept         | Multiple instances, parallel launches |
-| No mod browser              | Modrinth search, pages and installs   |
-
-Ported with behavior fixes: news feed URL, skin validation, JVM-arg filter,
-offline UUID consistency between CLI and GUI.
+| Area                | How RustLauncher does it                         |
+|---------------------|--------------------------------------------------|
+| Interface           | egui GUI in a small native binary                |
+| Storage             | typed JSON files (config/accounts/…)             |
+| Version JSON        | serde struct parsing, full install with SHA-1 checks |
+| Version list        | one merged local + remote catalog                |
+| servers.dat         | NBT-preserving merge, icons survive              |
+| CLI                 | waits as long as the game runs                   |
+| Java runtime        | required major version auto-selected             |
+| Instances           | multiple instances, parallel launches            |
+| Mods                | Modrinth search, pages and installs              |
+| Offline accounts    | vanilla-compatible UUIDs, Argon2id password DB   |
 
 ## License
 
-AGPL-3.0 — same as the original PowerLaunch.
+AGPL-3.0
