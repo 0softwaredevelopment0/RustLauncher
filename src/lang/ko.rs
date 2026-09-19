@@ -390,6 +390,11 @@ pub fn get(key: &str) -> Option<&'static str> {
         "you@example.com" => "you@example.com",
         "Your accounts" => "내 계정",
         "Z {0} A" => "Z {0} A",
+        "Command:" => "명령:",
+        "Custom text color" => "사용자 지정 텍스트 색상",
+        "Following:" => "추적 중:",
+        "Send" => "보내기",
+        "Type a command or chat message…" => "명령 또는 채팅 메시지를 입력하세요…",
         _ => return None,
     })
 }

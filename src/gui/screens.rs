@@ -159,7 +159,10 @@ impl App {
         let lang = self.settings.language;
         ui.horizontal(|ui| {
             ui.heading(tr(lang, "Console"));
-            // When several games run at once, pick which console to show.
+            // Follow one of the running instances. Only active instances are
+            // listed; with none running the picker is not shown at all.
+            // Every instance keeps filling its own console buffer even while
+            // it is not the one being displayed, so nothing is lost.
             let alive: Vec<(usize, String)> = self
                 .running_games
                 .iter()
@@ -167,22 +170,25 @@ impl App {
                 .filter(|(_, g)| g.running.load(Ordering::SeqCst))
                 .map(|(idx, g)| (idx, g.instance.clone()))
                 .collect();
-            if alive.len() > 1 {
-                let current = alive
+            if !alive.is_empty() {
+                let followed = self
+                    .running_games
                     .iter()
-                    .find(|(idx, _)| {
-                        self.running_games
-                            .get(*idx)
-                            .map(|g| Arc::ptr_eq(&g.console, &self.console))
-                            .unwrap_or(false)
-                    })
-                    .map(|(_, n)| n.clone())
+                    .find(|g| Arc::ptr_eq(&g.console, &self.console))
+                    .map(|g| g.instance.clone())
                     .unwrap_or_else(|| "…".to_string());
+                ui.label(tr(lang, "Following:"));
                 egui::ComboBox::from_id_salt("console_instance")
-                    .selected_text(current)
+                    .selected_text(followed)
+                    .width(160.0)
                     .show_ui(ui, |ui| {
                         for (idx, name) in &alive {
-                            if ui.selectable_label(false, name.clone()).clicked() {
+                            let selected = self
+                                .running_games
+                                .get(*idx)
+                                .map(|g| Arc::ptr_eq(&g.console, &self.console))
+                                .unwrap_or(false);
+                            if ui.selectable_label(selected, name.clone()).clicked() {
                                 if let Some(g) = self.running_games.get(*idx) {
                                     self.console = g.console.clone();
                                     self.console_seq = 0;
@@ -226,6 +232,38 @@ impl App {
         });
         ui.separator();
 
+        // Command line at the bottom: sends a chat line / command to the
+        // followed game's stdin. Reserved before the log area so the log
+        // scrolls in the space above it.
+        egui::TopBottomPanel::bottom("console_input_bar").show_inside(ui, |ui| {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                let active = self.console_follows_running();
+                ui.label(tr(lang, "Command:"));
+                // Leave room for the Send button on the same row.
+                let field_w = (ui.available_width() - 80.0).max(120.0);
+                let resp = ui.add_enabled(
+                    active,
+                    egui::TextEdit::singleline(&mut self.console_input)
+                        .hint_text(tr(lang, "Type a command or chat message…"))
+                        .desired_width(field_w),
+                );
+                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let send = ui
+                    .add_enabled(active, egui::Button::new(tr(lang, "Send")))
+                    .clicked();
+                if active && (enter || send) {
+                    let line = self.console_input.trim().to_string();
+                    if !line.is_empty() {
+                        self.console_input.clear();
+                        self.send_console_line(&line);
+                    }
+                    resp.request_focus();
+                }
+            });
+            ui.add_space(2.0);
+        });
+
         let all_lines: Vec<String> = {
             let buf = self.console.lock().unwrap_or_else(|e| e.into_inner());
             buf.clone()
@@ -246,18 +284,15 @@ impl App {
             .show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
                     ui.set_min_width(ui.available_width());
-                    egui::Grid::new("console_grid")
-                        .num_columns(1)
-                        .show(ui, |ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            ui.style_mut()
-                                .text_styles
-                                .insert(egui::TextStyle::Body, egui::FontId::monospace(12.0));
-                            for line in &lines {
-                                ui.label(line.as_str());
-                                ui.end_row();
-                            }
-                        });
+                    // Long lines wrap onto the next line instead of running
+                    // off the right edge.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    ui.style_mut()
+                        .text_styles
+                        .insert(egui::TextStyle::Body, egui::FontId::monospace(12.0));
+                    for line in &lines {
+                        ui.add(egui::Label::new(line.as_str()).wrap());
+                    }
                 });
             });
     }

@@ -457,6 +457,8 @@ pub struct App {
     // most-recently-started game: General tab status and Console selection).
     pub console: Arc<Mutex<Vec<String>>>,
     pub console_seq: usize,
+    /// Text typed in the Console command line, waiting to be sent.
+    pub console_input: String,
     /// One registry entry per running game; several can run at once.
     pub running_games: Vec<RunningGame>,
     pub(crate) game_log: Arc<Mutex<Option<SessionLog>>>,
@@ -595,6 +597,8 @@ pub struct RunningGame {
     pub running: Arc<AtomicBool>,
     /// The game's java PID for Stop/Kill.
     pub pid: Arc<Mutex<Option<u32>>>,
+    /// The game's stdin, for sending chat lines / commands from the Console.
+    pub stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     /// Last launch error, surfaced on the Instances tab.
     pub error: Arc<Mutex<Option<String>>>,
     /// Exit status text set by the worker when the game ends.

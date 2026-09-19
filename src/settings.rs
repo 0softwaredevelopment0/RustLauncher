@@ -231,6 +231,11 @@ pub struct Theme {
     pub button: [u8; 3],
     /// Selection, links and pressed-button fill.
     pub accent: [u8; 3],
+    /// Override every text color (launcher + console) when `custom_text`.
+    pub text_color: [u8; 3],
+    /// When true, all text uses [`Theme::text_color`]; when false the theme's
+    /// default text color applies (white-ish on the dark base).
+    pub custom_text: bool,
 }
 
 impl Default for Theme {
@@ -273,6 +278,8 @@ impl Theme {
             bg_image: String::new(),
             button,
             accent,
+            text_color: [255, 255, 255],
+            custom_text: false,
         }
     }
 
@@ -298,6 +305,11 @@ impl Theme {
 
     pub fn accent32(&self) -> egui::Color32 {
         let [r, g, b] = self.accent;
+        egui::Color32::from_rgb(r, g, b)
+    }
+
+    pub fn text_color32(&self) -> egui::Color32 {
+        let [r, g, b] = self.text_color;
         egui::Color32::from_rgb(r, g, b)
     }
 }
@@ -581,6 +593,8 @@ mod tests {
             bg_image: "C:/pics/bg.jpg".into(),
             button: [1, 2, 3],
             accent: [4, 5, 6],
+            text_color: [7, 8, 9],
+            custom_text: true,
         };
         s.save(&dir).unwrap();
         let loaded = Settings::load(&dir);

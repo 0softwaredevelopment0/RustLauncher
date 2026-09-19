@@ -390,6 +390,11 @@ pub fn get(key: &str) -> Option<&'static str> {
         "— select —" => "— auswählen —",
         "▲ click to collapse" => "▲ zum Einklappen klicken",
         "▼ click to expand log" => "▼ zum Erweitern des Protokolls klicken",
+        "Command:" => "Befehl:",
+        "Custom text color" => "Eigene Textfarbe",
+        "Following:" => "Verfolgt:",
+        "Send" => "Senden",
+        "Type a command or chat message…" => "Befehl oder Chat-Nachricht eingeben…",
         _ => return None,
     })
 }

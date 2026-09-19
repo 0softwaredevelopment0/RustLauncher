@@ -390,6 +390,11 @@ pub fn get(key: &str) -> Option<&'static str> {
         "— select —" => "— 选择 —",
         "▲ click to collapse" => "▲ 点击折叠",
         "▼ click to expand log" => "▼ 点击展开日志",
+        "Command:" => "命令：",
+        "Custom text color" => "自定义文字颜色",
+        "Following:" => "正在跟踪：",
+        "Send" => "发送",
+        "Type a command or chat message…" => "输入命令或聊天消息…",
         _ => return None,
     })
 }

@@ -61,6 +61,7 @@ impl App {
             terminate_dont_ask: false,
             console: Arc::new(Mutex::new(Vec::new())),
             console_seq: 0,
+            console_input: String::new(),
             running_games: Vec::new(),
             game_log: Arc::new(Mutex::new(None)),
             game_pid: Arc::new(Mutex::new(None)),
@@ -140,6 +141,40 @@ impl App {
         if excess > 0 {
             console.drain(..excess);
         }
+    }
+
+    /// Whether the console is currently following a live game (so the
+    /// command line can send to it).
+    pub(crate) fn console_follows_running(&self) -> bool {
+        self.running_games.iter().any(|g| {
+            g.running.load(Ordering::SeqCst) && Arc::ptr_eq(&g.console, &self.console)
+        })
+    }
+
+    /// Send one line to the followed game's stdin (a chat line or a command)
+    /// and echo it into the console. Returns false when no live game is
+    /// being followed.
+    pub(crate) fn send_console_line(&mut self, line: &str) -> bool {
+        let stdin = self
+            .running_games
+            .iter()
+            .find(|g| {
+                g.running.load(Ordering::SeqCst) && Arc::ptr_eq(&g.console, &self.console)
+            })
+            .map(|g| g.stdin.clone());
+        let Some(stdin) = stdin else {
+            return false;
+        };
+        {
+            use std::io::Write;
+            let mut guard = stdin.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(s) = guard.as_mut() {
+                let _ = writeln!(s, "{line}");
+                let _ = s.flush();
+            }
+        }
+        self.log_console(format!("> {line}"));
+        true
     }
 
     pub(crate) fn spawn_job<T, F>(&mut self, task: impl FnOnce() -> T + Send + 'static, apply: F)
@@ -412,6 +447,7 @@ impl App {
         let console = Arc::new(Mutex::new(Vec::new()));
         let running = Arc::new(AtomicBool::new(false));
         let pid = Arc::new(Mutex::new(None));
+        let stdin: Arc<Mutex<Option<std::process::ChildStdin>>> = Arc::new(Mutex::new(None));
         let log: Arc<Mutex<Option<SessionLog>>> = Arc::new(Mutex::new(None));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(String::new()));
@@ -424,6 +460,7 @@ impl App {
             console: console.clone(),
             running: running.clone(),
             pid: pid.clone(),
+            stdin: stdin.clone(),
             error: error.clone(),
             status: status.clone(),
         });
@@ -462,6 +499,7 @@ impl App {
                     &home_dir,
                     log,
                     pid,
+                    stdin,
                 );
                 running.store(false, Ordering::SeqCst);
                 if let Err(e) = &result {
@@ -926,6 +964,12 @@ impl App {
         visuals.widgets.hovered.bg_fill = button;
         visuals.widgets.hovered.weak_bg_fill = button;
         visuals.widgets.active.bg_fill = accent;
+        // Optional custom text color, applied to every widget and label.
+        visuals.override_text_color = if theme.custom_text {
+            Some(theme.text_color32())
+        } else {
+            None
+        };
         ctx.set_visuals(visuals);
     }
 
@@ -1071,6 +1115,7 @@ pub(crate) fn run_game_process(
     home_dir: &std::path::Path,
     game_log: Arc<Mutex<Option<SessionLog>>>,
     game_pid: Arc<Mutex<Option<u32>>>,
+    game_stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
 ) -> Result<i32> {
     let json = VersionJson::load(&version.json)?;
     let plan = launcher::build_launch_plan(
@@ -1138,6 +1183,7 @@ pub(crate) fn run_game_process(
         game_log.clone(),
         file_log,
         settings.language,
+        game_stdin,
     )?;
     *game_log.lock().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(code)
@@ -1150,6 +1196,7 @@ pub(crate) fn spawn_and_stream(
     game_log: Arc<Mutex<Option<SessionLog>>>,
     file_log: settings::FileLogMode,
     lang: crate::lang::Language,
+    game_stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
 ) -> Result<i32> {
     use std::io::BufRead;
     use std::process::{Command, Stdio};
@@ -1157,6 +1204,7 @@ pub(crate) fn spawn_and_stream(
     let mut child = Command::new(&plan.java)
         .args(&plan.args)
         .current_dir(&plan.working_dir)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -1168,8 +1216,10 @@ pub(crate) fn spawn_and_stream(
             )
         })?;
 
-    // Publish the PID so Stop/Kill can act on it.
+    // Publish the PID so Stop/Kill can act on it, and the stdin so the
+    // Console command line can send chat lines / commands to the game.
     *game_pid.lock().unwrap_or_else(|e| e.into_inner()) = Some(child.id());
+    *game_stdin.lock().unwrap_or_else(|e| e.into_inner()) = child.stdin.take();
 
     let stdout = child.stdout.take().context(tr(lang, "no stdout"))?;
     let stderr = child.stderr.take().context(tr(lang, "no stderr"))?;

@@ -390,6 +390,11 @@ pub fn get(key: &str) -> Option<&'static str> {
         "— select —" => "— 選択 —",
         "▲ click to collapse" => "▲ クリックで折りたたむ",
         "▼ click to expand log" => "▼ クリックでログを展開",
+        "Command:" => "コマンド:",
+        "Custom text color" => "テキストのカスタム色",
+        "Following:" => "追跡中:",
+        "Send" => "送信",
+        "Type a command or chat message…" => "コマンドまたはチャットメッセージを入力…",
         _ => return None,
     })
 }

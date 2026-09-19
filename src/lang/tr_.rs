@@ -390,6 +390,11 @@ pub fn get(key: &str) -> Option<&'static str> {
         "— select —" => "— seç —",
         "▲ click to collapse" => "▲ daraltmak için tıkla",
         "▼ click to expand log" => "▼ günlüğü genişletmek için tıkla",
+        "Command:" => "Komut:",
+        "Custom text color" => "Özel metin rengi",
+        "Following:" => "Takip edilen:",
+        "Send" => "Gönder",
+        "Type a command or chat message…" => "Bir komut veya mesaj yazın…",
         _ => return None,
     })
 }

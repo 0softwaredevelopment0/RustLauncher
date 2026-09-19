@@ -390,6 +390,11 @@ pub fn get(key: &str) -> Option<&'static str> {
         "— select —" => "— выбрать —",
         "▲ click to collapse" => "▲ нажмите, чтобы свернуть",
         "▼ click to expand log" => "▼ нажмите, чтобы развернуть журнал",
+        "Command:" => "Команда:",
+        "Custom text color" => "Свой цвет текста",
+        "Following:" => "Слежение:",
+        "Send" => "Отправить",
+        "Type a command or chat message…" => "Введите команду или сообщение…",
         _ => return None,
     })
 }

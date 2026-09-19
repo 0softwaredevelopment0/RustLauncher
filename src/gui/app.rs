@@ -415,6 +415,15 @@ impl App {
                     self.settings.theme.preset = settings::ThemePreset::Custom;
                 }
             });
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut self.settings.theme.custom_text,
+                    tr(lang, "Custom text color"),
+                );
+                ui.add_enabled_ui(self.settings.theme.custom_text, |ui| {
+                    ui.color_edit_button_srgb(&mut self.settings.theme.text_color);
+                });
+            });
             ui.label(
                 egui::RichText::new(tr(
                     lang,
