@@ -20,15 +20,17 @@ use super::state::{
     VersionFilter, VersionRow, VersionSort,
 };
 use super::toast_ui::{draw_search_icon, draw_warning_triangle};
+use crate::lang::{tr, tr_fmt};
 use crate::settings;
 
 impl App {
     pub(crate) fn ui_general(&mut self, ui: &mut egui::Ui) {
-        ui.heading("General");
+        let lang = self.settings.language;
+        ui.heading(tr(lang, "General"));
         ui.add_space(6.0);
 
         egui::Grid::new("play_grid").num_columns(2).show(ui, |ui| {
-            ui.label("Instance");
+            ui.label(tr(lang, "Instance"));
             let instance_names: Vec<String> = self
                 .instance_store
                 .instances
@@ -40,7 +42,7 @@ impl App {
             }
             egui::ComboBox::from_id_salt("instance_combo")
                 .selected_text(if self.launch_instance.is_empty() {
-                    "— none —".to_string()
+                    tr(lang, "— none —").to_string()
                 } else {
                     self.launch_instance.clone()
                 })
@@ -51,24 +53,24 @@ impl App {
                 });
             ui.end_row();
 
-            ui.label("Account");
+            ui.label(tr(lang, "Account"));
             let current = self
                 .accounts
                 .current()
                 .map(|a| a.username.clone())
                 .unwrap_or_default();
             ui.label(if current.is_empty() {
-                "— none —".to_string()
+                tr(lang, "— none —").to_string()
             } else {
                 current
             });
             ui.end_row();
 
-            ui.label("Version");
+            ui.label(tr(lang, "Version"));
             let names: Vec<String> = self.versions.iter().map(|v| v.name.clone()).collect();
             egui::ComboBox::from_id_salt("version_combo")
                 .selected_text(if self.settings.selected_version.is_empty() {
-                    "— select —".to_string()
+                    tr(lang, "— select —").to_string()
                 } else {
                     self.settings.selected_version.clone()
                 })
@@ -84,7 +86,7 @@ impl App {
             ui.end_row();
 
             if self.settings.auto_connect {
-                ui.label("Auto-connect");
+                ui.label(tr(lang, "Auto-connect"));
                 ui.text_edit_singleline(&mut self.settings.connect_server_ip);
                 ui.end_row();
             }
@@ -98,20 +100,20 @@ impl App {
             if ui
                 .add_enabled(
                     play_enabled,
-                    egui::Button::new(format!("{}  Launch", icons::PLAY_ARROW)),
+                    egui::Button::new(format!("{}  {}", icons::PLAY_ARROW, tr(lang, "Launch"))),
                 )
                 .clicked()
             {
                 self.start_game();
             }
-            if ui.button("Rescan versions").clicked() {
+            if ui.button(tr(lang, "Rescan versions")).clicked() {
                 self.reload_versions();
             }
             let game_running = self.any_game_running();
-            let stop = egui::Button::new(format!("{} Stop", icons::STOP));
+            let stop = egui::Button::new(format!("{} {}", icons::STOP, tr(lang, "Stop")));
             if ui
                 .add_enabled(game_running, stop)
-                .on_disabled_hover_text("The game is not running")
+                .on_disabled_hover_text(tr(lang, "The game is not running"))
                 .clicked()
             {
                 if self.settings.confirm_stop {
@@ -122,12 +124,12 @@ impl App {
                 }
             }
             let kill = egui::Button::new(
-                egui::RichText::new(format!("{} Kill", icons::KILL))
+                egui::RichText::new(format!("{} {}", icons::KILL, tr(lang, "Kill")))
                     .color(egui::Color32::LIGHT_RED),
             );
             if ui
                 .add_enabled(game_running, kill)
-                .on_disabled_hover_text("The game is not running")
+                .on_disabled_hover_text(tr(lang, "The game is not running"))
                 .clicked()
             {
                 if self.settings.confirm_kill {
@@ -154,8 +156,9 @@ impl App {
     }
 
     pub(crate) fn ui_console(&mut self, ui: &mut egui::Ui) {
+        let lang = self.settings.language;
         ui.horizontal(|ui| {
-            ui.heading("Console");
+            ui.heading(tr(lang, "Console"));
             // When several games run at once, pick which console to show.
             let alive: Vec<(usize, String)> = self
                 .running_games
@@ -190,29 +193,29 @@ impl App {
             }
             // How much of the game output to display in the console
             // (display filter only — log files are configured in Settings).
-            ui.label("Show in console:");
+            ui.label(tr(lang, "Show in console:"));
             egui::ComboBox::from_id_salt("console_mode")
-                .selected_text(self.settings.console_log_mode.label())
+                .selected_text(self.settings.console_log_mode.label(lang))
                 .width(150.0)
                 .show_ui(ui, |ui| {
                     for mode in settings::ConsoleMode::ALL {
                         ui.selectable_value(
                             &mut self.settings.console_log_mode,
                             mode,
-                            mode.label(),
+                            mode.label(lang),
                         );
                     }
                 });
-            if ui.button("Export to file…").clicked() {
+            if ui.button(tr(lang, "Export to file…")).clicked() {
                 self.export_console();
             }
-            if ui.button("Clear").clicked() {
+            if ui.button(tr(lang, "Clear")).clicked() {
                 self.console
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .clear();
             }
-            if ui.button("Copy all").clicked() {
+            if ui.button(tr(lang, "Copy all")).clicked() {
                 let text = self
                     .console
                     .lock()
@@ -262,34 +265,35 @@ impl App {
     // ── Instances tab ───────────────────────────────────────
 
     pub(crate) fn ui_instances(&mut self, ui: &mut egui::Ui) {
-        ui.heading(format!("{}  Instances", icons::VIDEOGAME_ASSET));
+        let lang = self.settings.language;
+        ui.heading(format!("{}  {}", icons::VIDEOGAME_ASSET, tr(lang, "Instances")));
         ui.add_space(6.0);
 
         // ── Create section ──
         egui::CollapsingHeader::new(
-            egui::RichText::new(format!("{}  New instance", icons::ADD)).strong(),
+            egui::RichText::new(format!("{}  {}", icons::ADD, tr(lang, "New instance"))).strong(),
         )
         .default_open(self.instance_store.instances.is_empty())
         .show(ui, |ui| {
             egui::Grid::new("new_instance_grid")
                 .num_columns(2)
                 .show(ui, |ui| {
-                    ui.label("Name");
+                    ui.label(tr(lang, "Name"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.new_instance_name)
-                            .hint_text("My instance")
+                            .hint_text(tr(lang, "My instance"))
                             .desired_width(260.0),
                     );
                     ui.end_row();
 
-                    ui.label("Game directory");
+                    ui.label(tr(lang, "Game directory"));
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.new_instance_dir)
                                 .hint_text("C:\\Games\\MyPack")
                                 .desired_width(260.0),
                         );
-                        if ui.button(format!("{} Browse…", icons::FOLDER)).clicked() {
+                        if ui.button(format!("{} {}", icons::FOLDER, tr(lang, "Browse…"))).clicked() {
                             if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                                 self.new_instance_dir = dir.to_string_lossy().to_string();
                             }
@@ -298,20 +302,20 @@ impl App {
                     ui.end_row();
                 });
             if ui
-                .button(format!("{}  Create instance", icons::CHECK_CIRCLE))
+                .button(format!("{}  {}", icons::CHECK_CIRCLE, tr(lang, "Create instance")))
                 .clicked()
             {
                 self.instances_error = None;
                 match self
                     .instance_store
-                    .create(&self.new_instance_name, &self.new_instance_dir)
+                    .create(&self.new_instance_name, &self.new_instance_dir, lang)
                 {
                     Ok(name) => {
-                        if let Err(e) = self.instance_store.save(&self.home_dir) {
+                        if let Err(e) = self.instance_store.save(&self.home_dir, lang) {
                             self.instances_error = Some(format!("{e:#}"));
                             self.notify_error("INSTANCES", format!("{e:#}"));
                         } else {
-                            self.notify_info(format!("Instance '{name}' created"));
+                            self.notify_info(tr_fmt(lang, "Instance '{0}' created", &[&name]));
                             self.new_instance_name.clear();
                             self.new_instance_dir.clear();
                         }
@@ -331,12 +335,18 @@ impl App {
         if running_count > 0 {
             egui::CollapsingHeader::new(
                 egui::RichText::new(format!(
-                    "{}  Running games ({})",
+                    "{}  {}",
                     icons::PLAY_ARROW,
-                    self.running_games
-                        .iter()
-                        .filter(|g| g.running.load(Ordering::SeqCst))
-                        .count()
+                    tr_fmt(
+                        lang,
+                        "Running games ({0})",
+                        &[&self
+                            .running_games
+                            .iter()
+                            .filter(|g| g.running.load(Ordering::SeqCst))
+                            .count()
+                            .to_string()]
+                    )
                 ))
                 .strong(),
             )
@@ -366,7 +376,7 @@ impl App {
                         ui.label(status_icon);
                         ui.label(format!("{inst} — {ver}"));
                         if alive {
-                            ui.weak("(running)");
+                            ui.weak(tr(lang, "(running)"));
                         } else if let Some(g) = self.running_games.get(idx) {
                             let s = g.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             if !s.is_empty() {
@@ -375,8 +385,8 @@ impl App {
                         }
 
                         if ui
-                            .add_enabled(alive, egui::Button::new(format!("{} Stop", icons::STOP)))
-                            .on_disabled_hover_text("Not running")
+                            .add_enabled(alive, egui::Button::new(format!("{} {}", icons::STOP, tr(lang, "Stop"))))
+                            .on_disabled_hover_text(tr(lang, "Not running"))
                             .clicked()
                         {
                             let pid = self.running_games[idx].pid.clone();
@@ -390,11 +400,11 @@ impl App {
                             .add_enabled(
                                 alive,
                                 egui::Button::new(
-                                    egui::RichText::new(format!("{} Kill", icons::KILL))
+                                    egui::RichText::new(format!("{} {}", icons::KILL, tr(lang, "Kill")))
                                         .color(egui::Color32::LIGHT_RED),
                                 ),
                             )
-                            .on_disabled_hover_text("Not running")
+                            .on_disabled_hover_text(tr(lang, "Not running"))
                             .clicked()
                         {
                             let pid = self.running_games[idx].pid.clone();
@@ -404,7 +414,7 @@ impl App {
                                 self.kill_instance_pid(idx);
                             }
                         }
-                        if ui.button("Console").clicked() {
+                        if ui.button(tr(lang, "Console")).clicked() {
                             if let Some(g) = self.running_games.get(idx) {
                                 self.console = g.console.clone();
                                 self.console_seq = 0;
@@ -415,13 +425,16 @@ impl App {
                     if let Some(g) = self.running_games.get(idx) {
                         let err = g.error.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         if let Some(err) = err {
-                            ui.colored_label(egui::Color32::LIGHT_RED, format!("Error: {err}"));
+                            ui.colored_label(
+                                egui::Color32::LIGHT_RED,
+                                tr_fmt(lang, "Error: {0}", &[&err]),
+                            );
                         }
                     }
                 }
                 ui.add_space(4.0);
                 // Clean up finished entries on demand.
-                if ui.button("Clear finished").clicked() {
+                if ui.button(tr(lang, "Clear finished")).clicked() {
                     self.running_games
                         .retain(|g| g.running.load(Ordering::SeqCst));
                 }
@@ -432,7 +445,7 @@ impl App {
         // ── Instance list ──
         if self.instance_store.instances.is_empty() {
             ui.add_space(6.0);
-            ui.weak("No instances yet — create one above to start playing.");
+            ui.weak(tr(lang, "No instances yet — create one above to start playing."));
         }
 
         let names: Vec<String> = self
@@ -457,19 +470,27 @@ impl App {
                         "{}  {}{}",
                         icons::VIDEOGAME_ASSET,
                         instance.name,
-                        if game.is_some() { "  ● running" } else { "" }
+                        if game.is_some() {
+                            format!("  ● {}", tr(lang, "running"))
+                        } else {
+                            String::new()
+                        }
                     ))
                     .strong(),
                 )
                 .id_salt(("instance", name.as_str()))
                 .show(ui, |ui| {
-                    ui.label(format!("Directory: {}", instance.game_dir));
+                    ui.label(tr_fmt(lang, "Directory: {0}", &[&instance.game_dir]));
 
                     ui.horizontal(|ui| {
                         if ui
                             .add_enabled(
                                 game.is_none(),
-                                egui::Button::new(format!("{}  Launch", icons::PLAY_ARROW)),
+                                egui::Button::new(format!(
+                                    "{}  {}",
+                                    icons::PLAY_ARROW,
+                                    tr(lang, "Launch")
+                                )),
                             )
                             .clicked()
                         {
@@ -481,9 +502,9 @@ impl App {
                         if ui
                             .add_enabled(
                                 stop_kill_enabled,
-                                egui::Button::new(format!("{} Stop", icons::STOP)),
+                                egui::Button::new(format!("{} {}", icons::STOP, tr(lang, "Stop"))),
                             )
-                            .on_disabled_hover_text("Not running")
+                            .on_disabled_hover_text(tr(lang, "Not running"))
                             .clicked()
                         {
                             let idx = game.unwrap();
@@ -498,11 +519,15 @@ impl App {
                             .add_enabled(
                                 stop_kill_enabled,
                                 egui::Button::new(
-                                    egui::RichText::new(format!("{} Kill", icons::KILL))
-                                        .color(egui::Color32::LIGHT_RED),
+                                    egui::RichText::new(format!(
+                                        "{} {}",
+                                        icons::KILL,
+                                        tr(lang, "Kill")
+                                    ))
+                                    .color(egui::Color32::LIGHT_RED),
                                 ),
                             )
-                            .on_disabled_hover_text("Not running")
+                            .on_disabled_hover_text(tr(lang, "Not running"))
                             .clicked()
                         {
                             let idx = game.unwrap();
@@ -519,7 +544,10 @@ impl App {
                         if let Some(g) = self.running_games.get(idx) {
                             let err = g.error.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             if let Some(err) = err {
-                                ui.colored_label(egui::Color32::LIGHT_RED, format!("Error: {err}"));
+                                ui.colored_label(
+                                    egui::Color32::LIGHT_RED,
+                                    tr_fmt(lang, "Error: {0}", &[&err]),
+                                );
                             }
                             let status = g.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             if !status.is_empty() {
@@ -534,11 +562,15 @@ impl App {
                             .add_enabled(
                                 !game_alive,
                                 egui::Button::new(
-                                    egui::RichText::new(format!("{}  Delete", icons::DELETE))
-                                        .color(egui::Color32::LIGHT_RED),
+                                    egui::RichText::new(format!(
+                                        "{}  {}",
+                                        icons::DELETE,
+                                        tr(lang, "Delete")
+                                    ))
+                                    .color(egui::Color32::LIGHT_RED),
                                 ),
                             )
-                            .on_disabled_hover_text("Stop the game before deleting")
+                            .on_disabled_hover_text(tr(lang, "Stop the game before deleting"))
                             .clicked()
                         {
                             self.instance_delete_pending = Some(instance.name.clone());
@@ -559,6 +591,7 @@ impl App {
             return;
         };
         let screen = ctx.screen_rect();
+        let lang = self.settings.language;
 
         egui::Area::new(egui::Id::new("instance_delete_dim"))
             .order(egui::Order::Middle)
@@ -572,7 +605,7 @@ impl App {
                 }
             });
 
-        egui::Window::new(egui::RichText::new("Confirm").strong())
+        egui::Window::new(egui::RichText::new(tr(lang, "Confirm")).strong())
             .id(egui::Id::new("instance_delete_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -586,36 +619,44 @@ impl App {
                     ui.add_space(6.0);
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("Delete this instance?")
+                            egui::RichText::new(tr(lang, "Delete this instance?"))
                                 .strong()
                                 .size(16.0),
                         );
-                        ui.label(format!(
-                            "'{name}' will be removed from the launcher. The game directory on \
-                             disk will NOT be deleted."
+                        ui.label(tr_fmt(
+                            lang,
+                            "'{0}' will be removed from the launcher. The game directory on \
+                             disk will NOT be deleted.",
+                            &[&name],
                         ));
                     });
                 });
                 ui.add_space(14.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                        .add(egui::Button::new(
+                            egui::RichText::new(tr(lang, "Confirm")).strong(),
+                        ))
                         .clicked()
                     {
                         self.instance_delete_pending = None;
                         if self.instance_store.delete(&name) {
-                            if let Err(e) = self.instance_store.save(&self.home_dir) {
+                            if let Err(e) = self.instance_store.save(&self.home_dir, lang) {
                                 self.instances_error = Some(format!("{e:#}"));
                                 self.notify_error("INSTANCES", format!("{e:#}"));
                             } else {
-                                self.notify_info(format!("Instance '{name}' deleted"));
+                                self.notify_info(tr_fmt(
+                                    lang,
+                                    "Instance '{0}' deleted",
+                                    &[&name],
+                                ));
                                 if self.launch_instance == name {
                                     self.launch_instance.clear();
                                 }
                             }
                         }
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr(lang, "Cancel")).clicked() {
                         self.instance_delete_pending = None;
                     }
                 });
@@ -641,14 +682,23 @@ impl App {
             return;
         };
         let name = game.instance.clone();
+        let lang = self.settings.language;
         let (title, body) = match kind {
             TerminateKind::Stop => (
-                format!("Stop {name}?"),
-                "The game will be asked to close. It usually exits within a few seconds, but unsaved progress may be lost.",
+                tr_fmt(lang, "Stop {0}?", &[&name]),
+                tr(
+                    lang,
+                    "The game will be asked to close. It usually exits within a few seconds, but unsaved progress may be lost.",
+                )
+                .to_string(),
             ),
             TerminateKind::Kill => (
-                format!("Force kill {name}?"),
-                "The game process tree will be terminated immediately. Unsaved progress will be lost.",
+                tr_fmt(lang, "Force kill {0}?", &[&name]),
+                tr(
+                    lang,
+                    "The game process tree will be terminated immediately. Unsaved progress will be lost.",
+                )
+                .to_string(),
             ),
         };
         let screen = ctx.screen_rect();
@@ -666,7 +716,7 @@ impl App {
             });
 
         let kill_confirmed = kind == TerminateKind::Kill;
-        egui::Window::new(egui::RichText::new("Confirm").strong())
+        egui::Window::new(egui::RichText::new(tr(lang, "Confirm")).strong())
             .id(egui::Id::new("instance_terminate_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -684,11 +734,13 @@ impl App {
                     });
                 });
                 ui.add_space(10.0);
-                ui.checkbox(&mut self.terminate_dont_ask, "Don't ask again");
+                ui.checkbox(&mut self.terminate_dont_ask, tr(lang, "Don't ask again"));
                 ui.add_space(10.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                        .add(egui::Button::new(
+                            egui::RichText::new(tr(lang, "Confirm")).strong(),
+                        ))
                         .clicked()
                     {
                         self.instance_terminate_pending = None;
@@ -705,7 +757,7 @@ impl App {
                             self.stop_pid(*pid_handle.lock().unwrap_or_else(|e| e.into_inner()));
                         }
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr(lang, "Cancel")).clicked() {
                         self.instance_terminate_pending = None;
                     }
                 });
@@ -713,13 +765,16 @@ impl App {
     }
 
     pub(crate) fn ui_versions(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Versions");
+        let lang = self.settings.language;
+        ui.heading(tr(lang, "Versions"));
         ui.add_space(4.0);
 
         if self.manifest.is_none() && !self.manifest_loading {
             self.manifest_loading = true;
             self.spawn_job(
-                || updater::fetch_manifest(&crate::net::agent()).map_err(|e| e.to_string()),
+                move || {
+                    updater::fetch_manifest(&crate::net::agent(), lang).map_err(|e| e.to_string())
+                },
                 |app, result| {
                     app.manifest = Some(result);
                     app.manifest_loading = false;
@@ -728,7 +783,7 @@ impl App {
         }
 
         // ── Filters section (top level, above the list) ──
-        ui.strong("Filters");
+        ui.strong(tr(lang, "Filters"));
         ui.add_space(2.0);
         ui.horizontal_wrapped(|ui| {
             for filter in [
@@ -740,12 +795,12 @@ impl App {
                 VersionFilter::Old,
                 VersionFilter::Installed,
             ] {
-                ui.selectable_value(&mut self.version_filter, filter, filter.label());
+                ui.selectable_value(&mut self.version_filter, filter, filter.label(lang));
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.weak("Loader:");
-            ui.selectable_value(&mut self.version_loader_filter, None, "Any");
+            ui.weak(tr(lang, "Loader:"));
+            ui.selectable_value(&mut self.version_loader_filter, None, tr(lang, "Any"));
             for l in updater::Loader::ALL {
                 ui.selectable_value(&mut self.version_loader_filter, Some(l), l.label());
             }
@@ -754,13 +809,13 @@ impl App {
             draw_search_icon(ui, 16.0, ui.visuals().text_color());
             ui.add(
                 egui::TextEdit::singleline(&mut self.version_search)
-                    .hint_text("Search…")
+                    .hint_text(tr(lang, "Search…"))
                     .desired_width(200.0),
             );
-            if ui.button("Rescan").clicked() {
+            if ui.button(tr(lang, "Rescan")).clicked() {
                 self.reload_versions();
             }
-            if ui.button("Refresh manifest").clicked() {
+            if ui.button(tr(lang, "Refresh manifest")).clicked() {
                 self.manifest = None;
             }
         });
@@ -775,10 +830,10 @@ impl App {
             .clone();
         if installing {
             ui.label(&progress);
-            ui.add(egui::ProgressBar::new(1.0).animate(true).text("working…"));
+            ui.add(egui::ProgressBar::new(1.0).animate(true).text(tr(lang, "working…")));
             ui.separator();
         }
-        egui::CollapsingHeader::new("Install a mod loader")
+        egui::CollapsingHeader::new(tr(lang, "Install a mod loader"))
             .id_salt("loader_installer")
             .default_open(false)
             .show(ui, |ui| {
@@ -789,15 +844,19 @@ impl App {
         if let Some(Err(e)) = &self.manifest {
             ui.colored_label(
                 egui::Color32::YELLOW,
-                format!("Manifest unavailable ({e}) — showing local versions only"),
+                tr_fmt(
+                    lang,
+                    "Manifest unavailable ({0}) — showing local versions only",
+                    &[&e.to_string()],
+                ),
             );
         }
 
         // ── Sort bar (same level as the list) ──
         ui.horizontal(|ui| {
-            ui.weak("Sort:");
+            ui.weak(tr(lang, "Sort:"));
             egui::ComboBox::from_id_salt("version_sort")
-                .selected_text(self.version_sort.label())
+                .selected_text(self.version_sort.label(lang))
                 .width(140.0)
                 .show_ui(ui, |ui| {
                     for s in [
@@ -808,11 +867,11 @@ impl App {
                         VersionSort::Alphabetical,
                         VersionSort::AlphabeticalReverse,
                     ] {
-                        ui.selectable_value(&mut self.version_sort, s, s.label());
+                        ui.selectable_value(&mut self.version_sort, s, s.label(lang));
                     }
                 });
             let total = self.versions.len();
-            ui.weak(format!("{} installed", total));
+            ui.weak(tr_fmt(lang, "{0} installed", &[&total.to_string()]));
         });
 
         let manifest_opt = match &self.manifest {
@@ -832,13 +891,14 @@ impl App {
             .collect();
         sort_version_rows(&mut shown, self.version_sort);
 
-        ui.weak(format!(
-            "selected: {}",
-            if self.settings.selected_version.is_empty() {
-                "— none —"
+        ui.weak(tr_fmt(
+            lang,
+            "selected: {0}",
+            &[if self.settings.selected_version.is_empty() {
+                tr(lang, "— none —")
             } else {
                 &self.settings.selected_version
-            }
+            }],
         ));
 
         // The version list takes all remaining space.
@@ -849,13 +909,14 @@ impl App {
                     self.version_row_ui(ui, row, installing);
                 }
                 if shown.is_empty() {
-                    ui.weak("No versions match the current filter.");
+                    ui.weak(tr(lang, "No versions match the current filter."));
                 }
             });
     }
 
     /// Render one row of the version list (Select / Install controls).
     pub(crate) fn version_row_ui(&mut self, ui: &mut egui::Ui, row: &VersionRow, installing: bool) {
+        let lang = self.settings.language;
         ui.horizontal(|ui| {
             if row.installed {
                 ui.label("✔");
@@ -869,24 +930,24 @@ impl App {
                     format!("[{}]", loader.label()),
                 );
             } else {
-                ui.weak(format!("[{}]", row.kind));
+                ui.weak(format!("[{}]", tr(lang, row.kind.as_str())));
             }
             if row.is_latest_release {
-                ui.weak("(latest release)");
+                ui.weak(tr(lang, "(latest release)"));
             }
             let is_selected = self.settings.selected_version == row.name;
             if is_selected {
-                ui.colored_label(egui::Color32::LIGHT_GREEN, "selected");
+                ui.colored_label(egui::Color32::LIGHT_GREEN, tr(lang, "selected"));
             }
             if row.installed {
                 if is_selected {
-                    ui.weak("current");
-                } else if ui.button("Select").clicked() {
+                    ui.weak(tr(lang, "current"));
+                } else if ui.button(tr(lang, "Select")).clicked() {
                     self.settings.selected_version = row.name.clone();
                     self.save_settings();
                 }
             } else if ui
-                .add_enabled(!installing, egui::Button::new("Install"))
+                .add_enabled(!installing, egui::Button::new(tr(lang, "Install")))
                 .clicked()
             {
                 if let Some(remote) = row.remote.clone() {
@@ -905,10 +966,12 @@ impl App {
         self.loader_builds_loading = true;
         let mc_task = mc.to_string();
         let mc_key = mc.to_string();
+        let lang = self.settings.language;
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
-                updater::fetch_loader_builds(&agent, loader, &mc_task).map_err(|e| e.to_string())
+                updater::fetch_loader_builds(&agent, loader, &mc_task, lang)
+                    .map_err(|e| e.to_string())
             },
             move |app, result| {
                 app.loader_builds.insert((loader, mc_key), Some(result));
@@ -932,39 +995,56 @@ impl App {
         let progress = self.install_progress.clone();
         let installing = self.installing.clone();
         let mc_display = mc.clone();
+        let lang = self.settings.language;
 
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
-                let result =
-                    updater::install_loader(&agent, &game_dir, loader, &mc, &build, &mut |msg| {
+                let result = updater::install_loader(
+                    &agent,
+                    &game_dir,
+                    loader,
+                    &mc,
+                    &build,
+                    lang,
+                    &mut |msg| {
                         *progress.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
-                    });
+                    },
+                );
                 installing.store(false, Ordering::SeqCst);
                 result.map_err(|e| e.to_string())
             },
             move |app, result| {
                 let mc = mc_display;
+                let lang = app.settings.language;
                 match &result {
                     Ok(outcome) => {
                         app.settings.selected_version = outcome.version_id.clone();
                         app.save_settings();
                         app.log_console(format!(
-                            "[RustLauncher] installed {} ({} new files)",
-                            outcome.version_id, outcome.downloaded_files
+                            "[RustLauncher] {}",
+                            tr_fmt(
+                                lang,
+                                "installed {0} ({1} new files)",
+                                &[
+                                    &outcome.version_id,
+                                    &outcome.downloaded_files.to_string()
+                                ]
+                            )
                         ));
-                        app.notify_info(format!(
-                            "{} {} on {mc} is ready to play",
-                            loader.label(),
-                            outcome.version_id
+                        app.notify_info(tr_fmt(
+                            lang,
+                            "{0} {1} on {2} is ready to play",
+                            &[loader.label(), &outcome.version_id, &mc],
                         ));
                     }
                     Err(e) => {
                         app.notify_error(
                             "LOADER-INSTALL",
-                            format!(
-                                "{loader_label} install failed: {e}",
-                                loader_label = loader.label()
+                            tr_fmt(
+                                lang,
+                                "{0} install failed: {1}",
+                                &[loader.label(), &e.to_string()],
                             ),
                         );
                     }
@@ -976,7 +1056,8 @@ impl App {
     }
 
     pub(crate) fn ui_loader_row(&mut self, ui: &mut egui::Ui, installing: bool) {
-        ui.strong("Install a mod loader");
+        let lang = self.settings.language;
+        ui.strong(tr(lang, "Install a mod loader"));
         ui.add_space(2.0);
 
         // The game root must be configured; the installer writes into
@@ -986,9 +1067,10 @@ impl App {
         if !game_dir_ok {
             ui.colored_label(
                 egui::Color32::YELLOW,
-                format!(
-                    "Root game directory is not set — configure it in Settings; installs would go to {}",
-                    game_dir.display()
+                tr_fmt(
+                    lang,
+                    "Root game directory is not set — configure it in Settings; installs would go to {0}",
+                    &[&game_dir.display().to_string()],
                 ),
             );
         }
@@ -1007,14 +1089,17 @@ impl App {
             })
             .unwrap_or_default();
         if releases.is_empty() {
-            ui.weak("Load the Mojang manifest (Refresh manifest) to pick a version.");
+            ui.weak(tr(
+                lang,
+                "Load the Mojang manifest (Refresh manifest) to pick a version.",
+            ));
             return;
         }
         let mc_selected = self
             .loader_mc_pick
             .clone()
             .unwrap_or_else(|| releases[0].clone());
-        egui::ComboBox::from_label("Minecraft")
+        egui::ComboBox::from_label(tr(lang, "Minecraft"))
             .width(160.0)
             .selected_text(&mc_selected)
             .show_ui(ui, |ui| {
@@ -1041,12 +1126,17 @@ impl App {
         let builds_state = self.loader_builds.get(&key);
         match builds_state {
             None => {
-                ui.weak(format!("Loading {} builds…", self.loader_pick.label()));
+                ui.weak(tr_fmt(
+                    lang,
+                    "Loading {0} builds…",
+                    &[self.loader_pick.label()],
+                ));
             }
             Some(None) => {
-                ui.weak(format!(
-                    "{} is not available for {mc}",
-                    self.loader_pick.label()
+                ui.weak(tr_fmt(
+                    lang,
+                    "{0} is not available for {1}",
+                    &[self.loader_pick.label(), &mc],
                 ));
             }
             Some(Some(Err(e))) => {
@@ -1064,7 +1154,7 @@ impl App {
                             let text = if b.stable {
                                 b.version.clone()
                             } else {
-                                format!("{} (beta)", b.version)
+                                tr_fmt(lang, "{0} (beta)", &[&b.version])
                             };
                             ui.selectable_value(
                                 self.loader_selected
@@ -1082,10 +1172,10 @@ impl App {
                     if ui
                         .add_enabled(
                             !installing && game_dir_ok,
-                            egui::Button::new(format!(
-                                "Install {} {} on {mc}",
-                                self.loader_pick.label(),
-                                build.version
+                            egui::Button::new(tr_fmt(
+                                lang,
+                                "Install {0} {1} on {2}",
+                                &[self.loader_pick.label(), &build.version, &mc],
                             )),
                         )
                         .clicked()
@@ -1106,27 +1196,40 @@ impl App {
         let game_dir = self.active_game_dir();
         let progress = self.install_progress.clone();
         let installing = self.installing.clone();
+        let lang = self.settings.language;
 
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
-                let result = updater::install_version(&agent, &game_dir, &version, &mut |msg| {
-                    *progress.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
-                });
+                let result =
+                    updater::install_version(&agent, &game_dir, &version, lang, &mut |msg| {
+                        *progress.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
+                    });
                 installing.store(false, Ordering::SeqCst);
                 result.map_err(|e| e.to_string())
             },
             |app, result| {
+                let lang = app.settings.language;
                 match &result {
                     Ok(outcome) => {
                         app.settings.selected_version = outcome.version_id.clone();
                         app.save_settings();
                         app.log_console(format!(
-                            "[RustLauncher] installed {} ({} new files)",
-                            outcome.version_id, outcome.downloaded_files
+                            "[RustLauncher] {}",
+                            tr_fmt(
+                                lang,
+                                "installed {0} ({1} new files)",
+                                &[
+                                    &outcome.version_id,
+                                    &outcome.downloaded_files.to_string()
+                                ]
+                            )
                         ));
                     }
-                    Err(e) => app.log_console(format!("[RustLauncher] install failed: {e}")),
+                    Err(e) => app.log_console(format!(
+                        "[RustLauncher] {}",
+                        tr_fmt(lang, "install failed: {0}", &[&e.to_string()])
+                    )),
                 }
                 app.reload_versions();
                 app.play_status.clear();
@@ -1135,16 +1238,17 @@ impl App {
     }
 
     pub(crate) fn ui_servers(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Servers");
+        let lang = self.settings.language;
+        ui.heading(tr(lang, "Servers"));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Name");
+            ui.label(tr(lang, "Name"));
             ui.text_edit_singleline(&mut self.new_server_name);
-            ui.label("Address");
+            ui.label(tr(lang, "Address"));
             ui.text_edit_singleline(&mut self.new_server_addr);
-            if ui.button("Add").clicked() {
+            if ui.button(tr(lang, "Add")).clicked() {
                 if self.new_server_addr.trim().is_empty() {
-                    self.servers_dat_status = "Address is required".into();
+                    self.servers_dat_status = tr(lang, "Address is required").into();
                 } else {
                     self.servers
                         .add(&self.new_server_name, &self.new_server_addr);
@@ -1164,23 +1268,23 @@ impl App {
                     ui.label(&entry.name);
                     ui.weak(entry.display_ip());
                     if let Some(status) = self.server_status.get(&index) {
-                        let color = if status == "online" {
+                        let color = if *status == servers::ServerStatus::Online {
                             egui::Color32::LIGHT_GREEN
                         } else {
                             egui::Color32::LIGHT_RED
                         };
-                        ui.colored_label(color, status);
+                        ui.colored_label(color, status.display(lang));
                     }
-                    if ui.small_button("Check").clicked() {
+                    if ui.small_button(tr(lang, "Check")).clicked() {
                         let address = entry.display_ip();
                         self.spawn_job(
-                            move || servers::check_status(&address).to_string(),
+                            move || servers::check_status(&address, lang),
                             move |app, status| {
                                 app.server_status.insert(index, status);
                             },
                         );
                     }
-                    if ui.small_button("Delete").clicked() {
+                    if ui.small_button(tr(lang, "Delete")).clicked() {
                         self.servers.remove(index);
                         self.server_status.clear();
                         self.save_servers();
@@ -1188,31 +1292,42 @@ impl App {
                 });
             }
             if self.servers.servers.is_empty() {
-                ui.weak("No servers yet. Add one above or import servers.dat.");
+                ui.weak(tr(lang, "No servers yet. Add one above or import servers.dat."));
             }
         });
 
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("Save to servers.dat").clicked() {
+            if ui.button(tr(lang, "Save to servers.dat")).clicked() {
                 let path = servers::servers_dat_path(&self.active_game_dir());
                 let list = self.servers.servers.clone();
                 match servers::write_servers_dat(&path, &list) {
                     Ok(()) => {
-                        self.servers_dat_status = format!("written to {}", path.display());
+                        self.servers_dat_status = tr_fmt(
+                            lang,
+                            "written to {0}",
+                            &[&path.display().to_string()],
+                        );
                     }
-                    Err(e) => self.servers_dat_status = format!("failed: {e:#}"),
+                    Err(e) => {
+                        self.servers_dat_status =
+                            tr_fmt(lang, "failed: {0}", &[&format!("{e:#}")])
+                    }
                 }
             }
-            if ui.button("Import from servers.dat").clicked() {
+            if ui.button(tr(lang, "Import from servers.dat")).clicked() {
                 let path = servers::servers_dat_path(&self.active_game_dir());
                 let imported = servers::read_servers_dat(&path);
                 if imported.is_empty() {
-                    self.servers_dat_status = format!("nothing to import from {}", path.display());
+                    self.servers_dat_status = tr_fmt(
+                        lang,
+                        "nothing to import from {0}",
+                        &[&path.display().to_string()],
+                    );
                 } else {
                     self.servers.servers = imported;
                     self.save_servers();
-                    self.servers_dat_status = "imported".into();
+                    self.servers_dat_status = tr(lang, "imported").into();
                 }
             }
             if !self.servers_dat_status.is_empty() {
@@ -1226,40 +1341,41 @@ impl App {
     /// Ely.by (username + password against the Yggdrasil authserver) and
     /// Mojang/Microsoft (OAuth device-code flow).
     pub(crate) fn ui_accounts(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Accounts");
+        let lang = self.settings.language;
+        ui.heading(tr(lang, "Accounts"));
         ui.add_space(4.0);
 
         // ── Add account ──────────────────────────────────────────
         ui.group(|ui| {
-            ui.strong("Add account");
+            ui.strong(tr(lang, "Add account"));
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 for kind in auth::AccountKind::ALL {
-                    ui.selectable_value(&mut self.new_account_kind, *kind, kind.label());
+                    ui.selectable_value(&mut self.new_account_kind, *kind, kind.label(lang));
                 }
             });
             match self.new_account_kind {
                 AccountKind::Offline => {
                     ui.horizontal(|ui| {
-                        ui.label("Nickname");
+                        ui.label(tr(lang, "Nickname"));
                         let name = ui
                             .add(
                                 egui::TextEdit::singleline(&mut self.username_input)
-                                    .hint_text("3-16 chars")
+                                    .hint_text(tr(lang, "3-16 chars"))
                                     .desired_width(140.0),
                             )
                             .lost_focus();
-                        ui.label("Password");
+                        ui.label(tr(lang, "Password"));
                         let pass = ui
                             .add(
                                 egui::TextEdit::singleline(&mut self.new_account_password)
                                     .password(true)
-                                    .hint_text("required")
+                                    .hint_text(tr(lang, "required"))
                                     .desired_width(140.0),
                             )
                             .lost_focus();
                         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if (ui.button("Create").clicked() || ((name || pass) && enter))
+                        if (ui.button(tr(lang, "Create")).clicked() || ((name || pass) && enter))
                             && !self.account_busy
                         {
                             let name = self.username_input.trim().to_string();
@@ -1272,7 +1388,7 @@ impl App {
                                     // through the DB so any store can do it; the
                                     // live in-memory store is refreshed afterwards.
                                     let mut store = AccountStore::load(&LauncherPaths::probe());
-                                    store.add_offline(&name, &password)
+                                    store.add_offline(&name, &password, lang)
                                 },
                                 move |app, result| {
                                     app.account_busy = false;
@@ -1281,21 +1397,22 @@ impl App {
                             );
                         }
                     });
-                    ui.weak(
+                    ui.weak(tr(
+                        lang,
                         "The password is stored as an Argon2id hash in the launcher's database.",
-                    );
+                    ));
                 }
                 AccountKind::ElyBy => {
                     ui.horizontal(|ui| {
-                        ui.label("Ely.by email / login");
+                        ui.label(tr(lang, "Ely.by email / login"));
                         let user = ui
                             .add(
                                 egui::TextEdit::singleline(&mut self.online_login_input)
-                                    .hint_text("you@example.com")
+                                    .hint_text(tr(lang, "you@example.com"))
                                     .desired_width(180.0),
                             )
                             .lost_focus();
-                        ui.label("Password");
+                        ui.label(tr(lang, "Password"));
                         let pass = ui
                             .add(
                                 egui::TextEdit::singleline(&mut self.online_password_input)
@@ -1304,14 +1421,14 @@ impl App {
                             )
                             .lost_focus();
                         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if (ui.button("Log in").clicked() || ((user || pass) && enter))
+                        if (ui.button(tr(lang, "Log in")).clicked() || ((user || pass) && enter))
                             && !self.account_busy
                         {
                             let user = self.online_login_input.trim().to_string();
                             let password = self.online_password_input.clone();
                             self.account_busy = true;
                             self.spawn_job(
-                                move || auth::login_elyby(&user, &password),
+                                move || auth::login_elyby(&user, &password, lang),
                                 move |app, result| {
                                     app.account_busy = false;
                                     app.finish_online_login(result);
@@ -1319,20 +1436,24 @@ impl App {
                             );
                         }
                     });
-                    ui.weak(
+                    ui.weak(tr(
+                        lang,
                         "Logs in against authserver.ely.by; the session token is stored in the DB.",
-                    );
+                    ));
                 }
                 AccountKind::Mojang => {
-                    ui.label("Sign in with a Microsoft account that owns Minecraft: Java Edition.");
+                    ui.label(tr(
+                        lang,
+                        "Sign in with a Microsoft account that owns Minecraft: Java Edition.",
+                    ));
                     if self.ms_login.is_none()
                         && !self.account_busy
-                        && ui.button("Start Microsoft sign-in").clicked()
+                        && ui.button(tr(lang, "Start Microsoft sign-in")).clicked()
                     {
                         self.account_busy = true;
                         self.spawn_job(
                             move || {
-                                auth::microsoft_begin(&crate::net::agent())
+                                auth::microsoft_begin(&crate::net::agent(), lang)
                                     .map_err(|e| e.to_string())
                             },
                             move |app, result| match result {
@@ -1344,8 +1465,11 @@ impl App {
                                         error: None,
                                         cancelled: false,
                                     });
-                                    app.notify_info(format!(
-                                        "Enter the code {user_code} at microsoft.com/link"
+                                    let lang = app.settings.language;
+                                    app.notify_info(tr_fmt(
+                                        lang,
+                                        "Enter the code {0} at microsoft.com/link",
+                                        &[&user_code],
                                     ));
                                 }
                                 Err(e) => {
@@ -1359,25 +1483,25 @@ impl App {
                     if let Some(mut state) = ms_state {
                         ui.group(|ui| {
                             ui.horizontal(|ui| {
-                                ui.label("Go to");
+                                ui.label(tr(lang, "Go to"));
                                 ui.hyperlink("https://www.microsoft.com/link");
                                 ui.add_space(8.0);
-                                ui.label("and enter code:");
+                                ui.label(tr(lang, "and enter code:"));
                                 ui.label(
                                     egui::RichText::new(&state.user_code)
                                         .strong()
                                         .monospace()
                                         .size(18.0),
                                 );
-                                if ui.button("Copy").clicked() {
+                                if ui.button(tr(lang, "Copy")).clicked() {
                                     ui.ctx().copy_text(state.user_code.clone());
                                 }
                             });
-                            ui.weak("Waiting for you to finish in the browser…");
+                            ui.weak(tr(lang, "Waiting for you to finish in the browser…"));
                             if let Some(err) = &state.error {
                                 ui.colored_label(egui::Color32::LIGHT_RED, err);
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(tr(lang, "Cancel")).clicked() {
                                 state.cancelled = true;
                             }
                         });
@@ -1398,8 +1522,12 @@ impl App {
                                 self.ms_polling = true;
                                 self.spawn_job(
                                     move || {
-                                        auth::microsoft_poll(&crate::net::agent(), &device_code)
-                                            .map_err(|e| e.to_string())
+                                        auth::microsoft_poll(
+                                            &crate::net::agent(),
+                                            &device_code,
+                                            lang,
+                                        )
+                                        .map_err(|e| e.to_string())
                                     },
                                     move |app, result| {
                                         app.ms_polling = false;
@@ -1434,7 +1562,7 @@ impl App {
             }
             if self.account_busy {
                 ui.spinner();
-                ui.weak("working…");
+                ui.weak(tr(lang, "working…"));
             }
             if let Some(error) = &self.account_error {
                 ui.colored_label(egui::Color32::LIGHT_RED, error);
@@ -1444,7 +1572,7 @@ impl App {
         ui.add_space(6.0);
 
         // ── Account list ─────────────────────────────────────────
-        ui.strong("Your accounts");
+        ui.strong(tr(lang, "Your accounts"));
         ui.add_space(2.0);
         let rows: Vec<(AccountKind, String)> = self
             .accounts
@@ -1459,8 +1587,8 @@ impl App {
                     self.accounts.select(name);
                     self.save_accounts();
                 }
-                ui.weak(kind.label());
-                if ui.small_button("Remove").clicked() {
+                ui.weak(kind.label(lang));
+                if ui.small_button(tr(lang, "Remove")).clicked() {
                     // Removal always asks for proof: the password for offline
                     // accounts, a fresh login for online ones.
                     self.account_remove_pending = Some(name.clone());
@@ -1470,13 +1598,14 @@ impl App {
             });
         }
         if rows.is_empty() {
-            ui.weak("No accounts yet — create one above.");
+            ui.weak(tr(lang, "No accounts yet — create one above."));
         }
     }
 
     /// Common tail of every successful account mutation: refresh selection
     /// state, clear inputs, drop the error.
     pub(crate) fn finish_account_change(&mut self, result: Result<String>) {
+        let lang = self.settings.language;
         match result {
             Ok(name) => {
                 self.username_input.clear();
@@ -1488,7 +1617,7 @@ impl App {
                 self.accounts = AccountStore::load(&self.home_dir);
                 self.accounts.select(&name);
                 self.save_accounts();
-                self.notify_info(format!("Account {name} added"));
+                self.notify_info(tr_fmt(lang, "Account {0} added", &[&name]));
             }
             Err(e) => self.account_error = Some(e.to_string()),
         }
@@ -1534,6 +1663,7 @@ impl App {
         let rec = self.accounts.accounts.iter().find(|a| a.username == name);
         let kind = rec.map(|r| r.kind);
         let screen = ctx.screen_rect();
+        let lang = self.settings.language;
 
         egui::Area::new(egui::Id::new("account_remove_dim"))
             .order(egui::Order::Middle)
@@ -1547,7 +1677,7 @@ impl App {
                 }
             });
 
-        egui::Window::new(egui::RichText::new("Confirm removal").strong())
+        egui::Window::new(egui::RichText::new(tr(lang, "Confirm removal")).strong())
             .id(egui::Id::new("account_remove_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -1564,7 +1694,7 @@ impl App {
                     ui.vertical(|ui| {
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(format!("Remove {name}?"))
+                                egui::RichText::new(tr_fmt(lang, "Remove {0}?", &[&name]))
                                     .strong()
                                     .size(16.0),
                             )
@@ -1572,13 +1702,22 @@ impl App {
                         );
                         match kind {
                             Some(AccountKind::Offline) => {
-                                ui.label("Enter the account password to confirm removal.");
+                                ui.label(tr(
+                                    lang,
+                                    "Enter the account password to confirm removal.",
+                                ));
                             }
                             Some(AccountKind::ElyBy) => {
-                                ui.label("Sign in to Ely.by again to confirm removal.");
+                                ui.label(tr(
+                                    lang,
+                                    "Sign in to Ely.by again to confirm removal.",
+                                ));
                             }
                             Some(AccountKind::Mojang) => {
-                                ui.label("Sign in with Microsoft again to confirm removal.");
+                                ui.label(tr(
+                                    lang,
+                                    "Sign in with Microsoft again to confirm removal.",
+                                ));
                             }
                             None => {}
                         }
@@ -1589,11 +1728,11 @@ impl App {
                 let confirmed = match kind {
                     Some(AccountKind::Offline) => {
                         ui.horizontal(|ui| {
-                            ui.label("Password:");
+                            ui.label(tr(lang, "Password:"));
                             let resp = ui.add(
                                 egui::TextEdit::singleline(&mut self.account_remove_password)
                                     .password(true)
-                                    .hint_text("type the account password")
+                                    .hint_text(tr(lang, "type the account password"))
                                     .desired_width(240.0)
                                     .id(egui::Id::new("account_remove_password")),
                             );
@@ -1624,7 +1763,7 @@ impl App {
                     clicked = ui
                         .add_enabled(
                             ok,
-                            egui::Button::new(egui::RichText::new("Confirm").strong()),
+                            egui::Button::new(egui::RichText::new(tr(lang, "Confirm")).strong()),
                         )
                         .clicked();
                 });
@@ -1632,14 +1771,14 @@ impl App {
             }
             Some(AccountKind::ElyBy) => {
                 ui.horizontal(|ui| {
-                    ui.label("Ely.by login:");
+                    ui.label(tr(lang, "Ely.by login:"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.account_remove_login)
                             .desired_width(220.0),
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Password:");
+                    ui.label(tr(lang, "Password:"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.account_remove_password)
                             .password(true)
@@ -1655,7 +1794,7 @@ impl App {
                     if ui
                         .add_enabled(
                             ready,
-                            egui::Button::new(egui::RichText::new("Confirm").strong()),
+                            egui::Button::new(egui::RichText::new(tr(lang, "Confirm")).strong()),
                         )
                         .clicked()
                     {
@@ -1664,14 +1803,19 @@ impl App {
                         let password = self.account_remove_password.clone();
                         let name = name.clone();
                         self.spawn_job(
-                            move || auth::login_elyby(&user, &password),
+                            move || auth::login_elyby(&user, &password, lang),
                             move |app, res| match res {
                                 Ok(acc) => {
                                     if acc.username == name {
                                         app.remove_account_confirmed(&name);
                                     } else {
+                                        let lang = app.settings.language;
                                         app.account_remove_error = Some(
-                                            "that login belongs to another account".into(),
+                                            tr(
+                                                lang,
+                                                "that login belongs to another account",
+                                            )
+                                            .into(),
                                         );
                                     }
                                 }
@@ -1683,13 +1827,16 @@ impl App {
                 false
             }
             Some(AccountKind::Mojang) => {
-                ui.label("A Microsoft sign-in window will open. Complete it to remove this account.");
-                if ui.button("Start Microsoft sign-in").clicked() {
+                ui.label(tr(
+                    lang,
+                    "A Microsoft sign-in window will open. Complete it to remove this account.",
+                ));
+                if ui.button(tr(lang, "Start Microsoft sign-in")).clicked() {
                     let name = name.clone();
                     self.account_busy = true;
                     self.spawn_job(
                         move || {
-                            auth::microsoft_begin(&crate::net::agent())
+                            auth::microsoft_begin(&crate::net::agent(), lang)
                                 .map_err(|e| e.to_string())
                         },
                         move |app, result| match result {
@@ -1702,8 +1849,11 @@ impl App {
                                     error: None,
                                     cancelled: false,
                                 });
-                                app.notify_info(format!(
-                                    "Enter the code {user_code} at microsoft.com/link"
+                                let lang = app.settings.language;
+                                app.notify_info(tr_fmt(
+                                    lang,
+                                    "Enter the code {0} at microsoft.com/link",
+                                    &[&user_code],
                                 ));
                             }
                             Err(e) => {
@@ -1726,7 +1876,7 @@ impl App {
 
         ui.add_space(10.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr(lang, "Cancel")).clicked() {
                 self.account_remove_pending = None;
                 self.ms_removal = None;
             }
@@ -1744,7 +1894,7 @@ impl App {
             self.ms_polling = true;
             self.spawn_job(
                 move || {
-                    auth::microsoft_poll(&crate::net::agent(), &device_code)
+                    auth::microsoft_poll(&crate::net::agent(), &device_code, lang)
                         .map_err(|e| e.to_string())
                 },
                 move |app, result| {
@@ -1756,8 +1906,9 @@ impl App {
                                 app.remove_account_confirmed(&name);
                             } else {
                                 if let Some(state) = &mut app.ms_removal {
+                                    let lang = app.settings.language;
                                     state.error =
-                                        Some("that Microsoft account is not this account".into());
+                                        Some(tr(lang, "that Microsoft account is not this account").into());
                                 }
                             }
                         }
@@ -1776,6 +1927,7 @@ impl App {
     /// Remove the account (proof already collected). Falls back to the first
     /// remaining account when the removed one was selected.
     pub(crate) fn remove_account_confirmed(&mut self, name: &str) {
+        let lang = self.settings.language;
         let _ = self.accounts.remove(name);
         // Re-sync with the DB so the in-memory list matches what is stored.
         self.accounts = AccountStore::load(&self.home_dir);
@@ -1784,11 +1936,12 @@ impl App {
         self.account_remove_login.clear();
         self.account_remove_error = None;
         self.save_accounts();
-        self.notify_info(format!("Account {name} removed"));
+        self.notify_info(tr_fmt(lang, "Account {0} removed", &[name]));
     }
 
     pub(crate) fn ui_skins(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Skins");
+        let lang = self.settings.language;
+        ui.heading(tr(lang, "Skins"));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let mut username = self
@@ -1796,24 +1949,29 @@ impl App {
                 .current()
                 .map(|a| a.username.clone())
                 .unwrap_or_default();
-            ui.label("Download for");
+            ui.label(tr(lang, "Download for"));
             ui.add_enabled(
                 false,
                 egui::TextEdit::singleline(&mut username).desired_width(120.0),
             );
-            if ui.button("Download skin").clicked() && !username.is_empty() {
+            if ui.button(tr(lang, "Download skin")).clicked() && !username.is_empty() {
                 let dir = home::skins_dir(&self.home_dir);
                 let name = username.clone();
                 let name2 = username.clone();
-                self.skin_status = "Downloading…".into();
+                self.skin_status = tr(lang, "Downloading…").into();
                 self.spawn_job(
                     move || {
-                        skins::download_skin(&crate::net::agent(), &dir, &name)
+                        skins::download_skin(&crate::net::agent(), &dir, &name, lang)
                             .map_err(|e| e.to_string())
                     },
                     |app, result| match result {
                         Ok(path) => {
-                            app.skin_status = format!("saved {}", path.display());
+                            let lang = app.settings.language;
+                            app.skin_status = tr_fmt(
+                                lang,
+                                "saved {0}",
+                                &[&path.display().to_string()],
+                            );
                             app.refresh_skins();
                             app.selected_skin = Some(name2);
                         }
@@ -1821,13 +1979,13 @@ impl App {
                     },
                 );
             }
-            if ui.button("Import PNG…").clicked() {
+            if ui.button(tr(lang, "Import PNG…")).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("PNG skin", &["png"])
                     .pick_file()
                 {
                     let dir = home::skins_dir(&self.home_dir);
-                    match skins::import_skin(&dir, &path) {
+                    match skins::import_skin(&dir, &path, lang) {
                         Ok(name) => {
                             self.refresh_skins();
                             self.selected_skin = Some(name);
@@ -1871,7 +2029,7 @@ impl App {
             }
             if let Some((_, texture)) = &self.skin_texture {
                 ui.add_space(8.0);
-                ui.label(format!("Skin: {name}"));
+                ui.label(tr_fmt(lang, "Skin: {0}", &[&name]));
                 let size = if texture.size()[1] == 32 {
                     egui::vec2(256.0, 128.0)
                 } else {
@@ -1880,7 +2038,10 @@ impl App {
                 ui.add(egui::Image::new(texture).fit_to_exact_size(size));
             }
         } else {
-            ui.weak("No skin selected. Download one or import a 64x32/64x64 PNG.");
+            ui.weak(tr(
+                lang,
+                "No skin selected. Download one or import a 64x32/64x64 PNG.",
+            ));
         }
     }
 }

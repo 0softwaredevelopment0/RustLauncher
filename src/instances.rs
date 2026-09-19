@@ -10,6 +10,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::lang::{tr, Language};
+
 const FILE_NAME: &str = "instances.json";
 
 /// One launch target.
@@ -35,10 +37,10 @@ impl InstanceStore {
         }
     }
 
-    pub fn save(&self, home: &Path) -> Result<()> {
+    pub fn save(&self, home: &Path, lang: Language) -> Result<()> {
         let path = home.join(FILE_NAME);
         std::fs::write(path, serde_json::to_string_pretty(self)?)
-            .context("failed to write instances.json")?;
+            .context(tr(lang, "failed to write instances.json"))?;
         Ok(())
     }
 
@@ -48,14 +50,14 @@ impl InstanceStore {
 
     /// Create an instance; a numbered suffix is appended when the name exists.
     /// Returns the final name.
-    pub fn create(&mut self, name: &str, game_dir: &str) -> Result<String> {
+    pub fn create(&mut self, name: &str, game_dir: &str, lang: Language) -> Result<String> {
         let base = name.trim();
         if base.is_empty() {
-            anyhow::bail!("instance name is empty");
+            anyhow::bail!("{}", tr(lang, "instance name is empty"));
         }
         let dir = game_dir.trim();
         if dir.is_empty() {
-            anyhow::bail!("instance game directory is empty");
+            anyhow::bail!("{}", tr(lang, "instance game directory is empty"));
         }
         let mut final_name = base.to_string();
         let mut counter = 1;
@@ -92,8 +94,9 @@ mod tests {
 
     #[test]
     fn create_get_delete_lifecycle() {
+        use crate::lang::Language;
         let mut store = InstanceStore::default();
-        let name = store.create("My Pack", "C:/Games/MyPack").unwrap();
+        let name = store.create("My Pack", "C:/Games/MyPack", Language::English).unwrap();
         assert_eq!(name, "My Pack");
         assert_eq!(
             store.get("My Pack").map(|i| i.game_dir.as_str()),
@@ -101,7 +104,7 @@ mod tests {
         );
 
         // Duplicate names get a numbered suffix.
-        let dup = store.create("My Pack", "C:/Games/Other").unwrap();
+        let dup = store.create("My Pack", "C:/Games/Other", Language::English).unwrap();
         assert_eq!(dup, "My Pack (1)");
 
         assert!(store.delete("My Pack"));
@@ -111,20 +114,22 @@ mod tests {
 
     #[test]
     fn rejects_empty_name_and_dir() {
+        use crate::lang::Language;
         let mut store = InstanceStore::default();
-        assert!(store.create("", "C:/x").is_err());
-        assert!(store.create("X", "  ").is_err());
+        assert!(store.create("", "C:/x", Language::English).is_err());
+        assert!(store.create("X", "  ", Language::English).is_err());
     }
 
     #[test]
     fn persists_roundtrip() {
+        use crate::lang::Language;
         let dir = tmp("persist");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut store = InstanceStore::default();
-        store.create("A", "C:/Games/A").unwrap();
-        store.save(&dir).unwrap();
+        store.create("A", "C:/Games/A", Language::English).unwrap();
+        store.save(&dir, Language::English).unwrap();
 
         let loaded = InstanceStore::load(&dir);
         assert_eq!(loaded, store);

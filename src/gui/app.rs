@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 
 use crate::diagnostics;
 use crate::icons;
+use crate::lang::{Language, tr, tr_fmt};
 use crate::news::{self, NewsItem};
 use crate::settings;
 
@@ -12,6 +13,7 @@ use super::state::{App, ContentPlatform, Screen};
 
 impl App {
     pub(crate) fn ui_news(&mut self, ui: &mut egui::Ui) {
+        let lang = self.settings.language;
         // Detail view: single article.
         if let Some(idx) = self.news_selected {
             let item = match &self.news {
@@ -20,7 +22,10 @@ impl App {
             };
             if let Some(item) = item {
                 ui.horizontal(|ui| {
-                    if ui.button(format!("{} Back", icons::ARROW_BACK)).clicked() {
+                    if ui
+                        .button(format!("{} {}", icons::ARROW_BACK, tr(lang, "Back")))
+                        .clicked()
+                    {
                         self.news_selected = None;
                     }
                 });
@@ -32,9 +37,9 @@ impl App {
         }
 
         // Card grid.
-        ui.heading("News");
+        ui.heading(tr(lang, "News"));
         ui.add_space(4.0);
-        if ui.button("Refresh").clicked() {
+        if ui.button(tr(lang, "Refresh")).clicked() {
             self.news = None;
             self.news_selected = None;
             self.fetch_news();
@@ -42,12 +47,15 @@ impl App {
         ui.separator();
         match &self.news {
             None => {
-                ui.label("Loading…");
+                ui.label(tr(lang, "Loading…"));
             }
             Some(Err(e)) => {
-                ui.colored_label(egui::Color32::LIGHT_RED, format!("Feed unavailable: {e}"));
+                ui.colored_label(
+                    egui::Color32::LIGHT_RED,
+                    tr_fmt(lang, "Feed unavailable: {0}", &[&e.to_string()]),
+                );
                 ui.add_space(4.0);
-                for item in news::fallback_news() {
+                for item in news::fallback_news(lang) {
                     self.news_card(ui, &item, None);
                 }
             }
@@ -76,6 +84,7 @@ impl App {
     }
 
     fn news_card(&mut self, ui: &mut egui::Ui, item: &NewsItem, idx: Option<usize>) {
+        let lang = self.settings.language;
         let card_bg = egui::Color32::from_rgba_premultiplied(30, 30, 40, 200);
         let border_color = egui::Color32::from_rgba_premultiplied(60, 60, 80, 200);
 
@@ -89,7 +98,7 @@ impl App {
             .show(ui, |ui| {
                 // Top row: author + date.
                 ui.horizontal(|ui| {
-                    let name = item.author_name();
+                    let name = item.author_name(lang);
                     ui.label(egui::RichText::new(name).small().strong());
                     ui.label(
                         egui::RichText::new(item.formatted_date())
@@ -110,7 +119,7 @@ impl App {
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(format!("{}  Read more", icons::CHEVRON_RIGHT))
+                    egui::RichText::new(format!("{}  {}", icons::CHEVRON_RIGHT, tr(lang, "Read more")))
                         .small()
                         .strong()
                         .color(egui::Color32::from_rgb(0, 200, 255)),
@@ -137,9 +146,10 @@ impl App {
     }
 
     fn news_detail(&self, ui: &mut egui::Ui, item: &NewsItem) {
+        let lang = self.settings.language;
         // Author + date header.
         ui.horizontal(|ui| {
-            let name = item.author_name();
+            let name = item.author_name(lang);
             ui.label(egui::RichText::new(name).strong().size(14.0));
             ui.separator();
             ui.label(egui::RichText::new(item.formatted_date()).color(egui::Color32::GRAY));
@@ -155,34 +165,57 @@ impl App {
             ui.label(line);
         }
         if item.content.is_empty() {
-            ui.label(egui::RichText::new("No content").color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new(tr(lang, "No content")).color(egui::Color32::GRAY));
         }
     }
 
     pub(crate) fn ui_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Settings");
+        let lang = self.settings.language;
+        ui.heading(tr(lang, "Settings"));
         ui.add_space(4.0);
         // Java-mode checkboxes mirror `use_custom_java`; only one is checked.
         let mut default_java = !self.settings.use_custom_java;
         let mut custom_java = self.settings.use_custom_java;
         egui::ScrollArea::vertical().show(ui, |ui| {
+            // Language first: it applies immediately, no save needed.
+            ui.strong(tr(lang, "Language"));
+            ui.horizontal(|ui| {
+                let mut language = self.settings.language;
+                egui::ComboBox::from_id_salt("language")
+                    .selected_text(language.label())
+                    .width(140.0)
+                    .show_ui(ui, |ui| {
+                        for l in Language::ALL {
+                            ui.selectable_value(&mut language, l, l.label());
+                        }
+                    });
+                if language != self.settings.language {
+                    self.settings.language = language;
+                }
+            });
+            ui.label(
+                egui::RichText::new(tr(lang, "Applies immediately."))
+                    .small()
+                    .color(egui::Color32::GRAY),
+            );
             // Java: Default vs Custom, switched with checkboxes.
-            ui.strong("Java");
+            ui.strong(tr(lang, "Java"));
             ui.horizontal(|ui| {
                 if ui
-                    .checkbox(&mut default_java, "Default (auto-detect)")
+                    .checkbox(&mut default_java, tr(lang, "Default (auto-detect)"))
                     .changed()
                     && default_java
                 {
                     self.settings.use_custom_java = false;
                 }
-                if ui.checkbox(&mut custom_java, "Custom path").changed() && custom_java {
+                if ui.checkbox(&mut custom_java, tr(lang, "Custom path")).changed() && custom_java
+                {
                     self.settings.use_custom_java = true;
                 }
             });
             ui.add_enabled_ui(self.settings.use_custom_java, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Java executable");
+                    ui.label(tr(lang, "Java executable"));
                     ui.add_enabled(
                         true,
                         egui::TextEdit::singleline(&mut self.settings.java_path)
@@ -198,7 +231,7 @@ impl App {
             ui.add_space(4.0);
 
             // JVM flags: presets + free edit; heap flags are mandatory.
-            ui.strong("JVM flags");
+            ui.strong(tr(lang, "JVM flags"));
             ui.horizontal(|ui| {
                 for preset in crate::jvm::PRESETS {
                     let selected = self.settings.java_args == preset.args;
@@ -224,11 +257,11 @@ impl App {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect();
-                match crate::jvm::validate_jvm_args(&flags) {
+                match crate::jvm::validate_jvm_args(&flags, lang) {
                     Ok(()) => {
                         ui.colored_label(
                             egui::Color32::LIGHT_GREEN,
-                            format!("{} heap flags present", icons::CHECK),
+                            format!("{} {}", icons::CHECK, tr(lang, "heap flags present")),
                         );
                     }
                     Err(e) => {
@@ -238,54 +271,55 @@ impl App {
             }
             ui.add_space(4.0);
 
-            ui.strong("Game");
+            ui.strong(tr(lang, "Game"));
             ui.checkbox(
                 &mut self.settings.use_custom_resolution,
-                "Custom resolution",
+                tr(lang, "Custom resolution"),
             );
             ui.add_enabled_ui(self.settings.use_custom_resolution, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Width");
+                    ui.label(tr(lang, "Width"));
                     ui.add(egui::DragValue::new(&mut self.settings.game_width).range(320..=7680));
-                    ui.label("Height");
+                    ui.label(tr(lang, "Height"));
                     ui.add(egui::DragValue::new(&mut self.settings.game_height).range(240..=4320));
                 });
             });
 
-            ui.strong("Logs");
+            ui.strong(tr(lang, "Logs"));
             ui.horizontal(|ui| {
-                ui.label("Log to file:");
+                ui.label(tr(lang, "Log to file:"));
                 egui::ComboBox::from_id_salt("file_log")
-                    .selected_text(self.settings.file_log.label())
+                    .selected_text(self.settings.file_log.label(lang))
                     .width(170.0)
                     .show_ui(ui, |ui| {
                         for mode in settings::FileLogMode::ALL {
                             ui.selectable_value(
                                 &mut self.settings.file_log,
                                 mode,
-                                mode.label(),
+                                mode.label(lang),
                             );
                         }
                     });
             });
             ui.label(
-                egui::RichText::new(
+                egui::RichText::new(tr(
+                    lang,
                     "What the logs/ files (launcher + game) capture. \
                      What the Console tab shows is picked on the Console tab.",
-                )
+                ))
                 .small()
                 .color(egui::Color32::GRAY),
             );
-            ui.strong("Customization");
+            ui.strong(tr(lang, "Customization"));
             ui.horizontal(|ui| {
-                ui.label("Theme:");
+                ui.label(tr(lang, "Theme:"));
                 let mut preset = self.settings.theme.preset;
                 egui::ComboBox::from_id_salt("theme_preset")
-                    .selected_text(preset.label())
+                    .selected_text(preset.label(lang))
                     .width(110.0)
                     .show_ui(ui, |ui| {
                         for p in settings::ThemePreset::ALL {
-                            ui.selectable_value(&mut preset, p, p.label());
+                            ui.selectable_value(&mut preset, p, p.label(lang));
                         }
                     });
                 if preset != self.settings.theme.preset {
@@ -295,10 +329,10 @@ impl App {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("Background:");
+                ui.label(tr(lang, "Background:"));
                 for mode in settings::BackgroundMode::ALL {
                     if ui
-                        .radio_value(&mut self.settings.theme.background, mode, mode.label())
+                        .radio_value(&mut self.settings.theme.background, mode, mode.label(lang))
                         .changed()
                     {
                         self.settings.theme.preset = settings::ThemePreset::Custom;
@@ -308,7 +342,7 @@ impl App {
             match self.settings.theme.background {
                 settings::BackgroundMode::Color => {
                     ui.horizontal(|ui| {
-                        ui.label("Color:");
+                        ui.label(tr(lang, "Color:"));
                         if ui
                             .color_edit_button_srgb(&mut self.settings.theme.bg_color)
                             .changed()
@@ -319,14 +353,14 @@ impl App {
                 }
                 settings::BackgroundMode::Gradient => {
                     ui.horizontal(|ui| {
-                        ui.label("Top:");
+                        ui.label(tr(lang, "Top:"));
                         if ui
                             .color_edit_button_srgb(&mut self.settings.theme.bg_top)
                             .changed()
                         {
                             self.settings.theme.preset = settings::ThemePreset::Custom;
                         }
-                        ui.label("Bottom:");
+                        ui.label(tr(lang, "Bottom:"));
                         if ui
                             .color_edit_button_srgb(&mut self.settings.theme.bg_bottom)
                             .changed()
@@ -337,7 +371,7 @@ impl App {
                 }
                 settings::BackgroundMode::Image => {
                     ui.horizontal(|ui| {
-                        ui.label("Image:");
+                        ui.label(tr(lang, "Image:"));
                         let edit = ui.add(
                             egui::TextEdit::singleline(&mut self.settings.theme.bg_image)
                                 .desired_width(280.0),
@@ -357,21 +391,21 @@ impl App {
                         }
                     });
                     ui.label(
-                        egui::RichText::new("PNG or JPG photo, stretched to cover the window.")
+                        egui::RichText::new(tr(lang, "PNG or JPG photo, stretched to cover the window."))
                             .small()
                             .color(egui::Color32::GRAY),
                     );
                 }
             }
             ui.horizontal(|ui| {
-                ui.label("Buttons:");
+                ui.label(tr(lang, "Buttons:"));
                 if ui
                     .color_edit_button_srgb(&mut self.settings.theme.button)
                     .changed()
                 {
                     self.settings.theme.preset = settings::ThemePreset::Custom;
                 }
-                ui.label("Accent:");
+                ui.label(tr(lang, "Accent:"));
                 if ui
                     .color_edit_button_srgb(&mut self.settings.theme.accent)
                     .changed()
@@ -379,29 +413,30 @@ impl App {
                     self.settings.theme.preset = settings::ThemePreset::Custom;
                 }
                 if ui
-                    .checkbox(&mut self.settings.theme.dark_base, "Dark base")
+                    .checkbox(&mut self.settings.theme.dark_base, tr(lang, "Dark base"))
                     .changed()
                 {
                     self.settings.theme.preset = settings::ThemePreset::Custom;
                 }
             });
             ui.label(
-                egui::RichText::new(
+                egui::RichText::new(tr(
+                    lang,
                     "Accent colors selection, links and pressed buttons. \
                      Any manual tweak switches the theme to Custom.",
-                )
+                ))
                 .small()
                 .color(egui::Color32::GRAY),
             );
 
-            ui.strong("News");
+            ui.strong(tr(lang, "News"));
             ui.horizontal(|ui| {
-                ui.label("News site URL");
+                ui.label(tr(lang, "News site URL"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.settings.news_url).desired_width(360.0),
                 );
                 ui.label(
-                    egui::RichText::new("Website base URL used for the news feed")
+                    egui::RichText::new(tr(lang, "Website base URL used for the news feed"))
                         .small()
                         .color(egui::Color32::GRAY),
                 );
@@ -409,13 +444,16 @@ impl App {
         });
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button(format!("{} Save settings", icons::CHECK)).clicked() {
+            if ui
+                .button(format!("{} {}", icons::CHECK, tr(lang, "Save settings")))
+                .clicked()
+            {
                 self.save_settings();
                 self.reload_versions();
-                self.play_status = "Settings saved".into();
+                self.play_status = tr(lang, "Settings saved").into();
             }
             if ui
-                .button(format!("{} Reset settings", icons::RESTORE))
+                .button(format!("{} {}", icons::RESTORE, tr(lang, "Reset settings")))
                 .clicked()
             {
                 self.settings_reset_pending = true;
@@ -424,16 +462,18 @@ impl App {
     }
 
     pub(crate) fn ui_diagnostics(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Network diagnostics");
+        let lang = self.settings.language;
+        ui.heading(tr(lang, "Network diagnostics"));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!self.diag_running, egui::Button::new("Run tests"))
+                .add_enabled(!self.diag_running, egui::Button::new(tr(lang, "Run tests")))
                 .clicked()
             {
                 self.diag_running = true;
+                let lang = self.settings.language;
                 self.spawn_job(
-                    || diagnostics::run_all(&crate::net::agent()),
+                    move || diagnostics::run_all(&crate::net::agent(), lang),
                     |app, results| {
                         app.diag_results = Some(results);
                         app.diag_running = false;
@@ -441,13 +481,16 @@ impl App {
                 );
             }
             if self.diag_running {
-                ui.label("Testing…");
+                ui.label(tr(lang, "Testing…"));
             }
         });
         ui.separator();
         match &self.diag_results {
             None => {
-                ui.weak("Press Run tests to check DNS, HTTP and TCP connectivity.");
+                ui.weak(tr(
+                    lang,
+                    "Press Run tests to check DNS, HTTP and TCP connectivity.",
+                ));
             }
             Some(results) => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -488,29 +531,30 @@ impl eframe::App for App {
         }
 
         egui::SidePanel::left("nav").show(ctx, |ui| {
+            let lang = self.settings.language;
             ui.add_space(8.0);
             ui.heading("RustLauncher");
             ui.add_space(8.0);
             for (screen, label) in [
-                (Screen::General, format!("{}  General", icons::PLAY_ARROW)),
-                (Screen::Console, format!("{}  Console", icons::TERMINAL)),
+                (Screen::General, format!("{}  {}", icons::PLAY_ARROW, tr(lang, "General"))),
+                (Screen::Console, format!("{}  {}", icons::TERMINAL, tr(lang, "Console"))),
                 (
                     Screen::Instances,
-                    format!("{}  Instances", icons::VIDEOGAME_ASSET),
+                    format!("{}  {}", icons::VIDEOGAME_ASSET, tr(lang, "Instances")),
                 ),
-                (Screen::Versions, format!("{}  Versions", icons::LAYERS)),
-                (Screen::Servers, format!("{}  Servers", icons::DNS)),
+                (Screen::Versions, format!("{}  {}", icons::LAYERS, tr(lang, "Versions"))),
+                (Screen::Servers, format!("{}  {}", icons::DNS, tr(lang, "Servers"))),
                 (
                     Screen::Accounts,
-                    format!("{}  Accounts", icons::ACCOUNT_CIRCLE),
+                    format!("{}  {}", icons::ACCOUNT_CIRCLE, tr(lang, "Accounts")),
                 ),
-                (Screen::Skins, format!("{}  Skins", icons::FACE)),
-                (Screen::Modrinth, format!("{}  Modrinth", icons::EXTENSION)),
-                (Screen::News, format!("{}  News", icons::ARTICLE)),
-                (Screen::Settings, format!("{}  Settings", icons::SETTINGS)),
+                (Screen::Skins, format!("{}  {}", icons::FACE, tr(lang, "Skins"))),
+                (Screen::Modrinth, format!("{}  {}", icons::EXTENSION, tr(lang, "Modrinth"))),
+                (Screen::News, format!("{}  {}", icons::ARTICLE, tr(lang, "News"))),
+                (Screen::Settings, format!("{}  {}", icons::SETTINGS, tr(lang, "Settings"))),
                 (
                     Screen::Diagnostics,
-                    format!("{}  Diagnostics", icons::BUILD),
+                    format!("{}  {}", icons::BUILD, tr(lang, "Diagnostics")),
                 ),
             ] {
                 let selected = self.screen == screen;
@@ -524,11 +568,15 @@ impl eframe::App for App {
             }
             ui.separator();
             if let Some(account) = self.accounts.current() {
-                ui.label(format!("Player: {}", account.username));
+                ui.label(format!("{}: {}", tr(lang, "Player"), account.username));
             }
-            ui.label(format!("Version: {}", self.settings.selected_version));
+            ui.label(format!(
+                "{}: {}",
+                tr(lang, "Version"),
+                self.settings.selected_version
+            ));
             if self.any_game_running() {
-                ui.colored_label(egui::Color32::LIGHT_GREEN, "Game running");
+                ui.colored_label(egui::Color32::LIGHT_GREEN, tr(lang, "Game running"));
             }
         });
 
@@ -571,6 +619,7 @@ impl App {
     /// "Reset all settings to defaults?" dialog.
     fn show_settings_reset_confirmation(&mut self, ctx: &egui::Context) {
         let screen = ctx.screen_rect();
+        let lang = self.settings.language;
 
         egui::Area::new(egui::Id::new("settings_reset_dim"))
             .order(egui::Order::Middle)
@@ -584,7 +633,7 @@ impl App {
                 }
             });
 
-        egui::Window::new(egui::RichText::new("Confirm").strong())
+        egui::Window::new(egui::RichText::new(tr(lang, "Confirm")).strong())
             .id(egui::Id::new("settings_reset_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -598,36 +647,39 @@ impl App {
                     ui.add_space(6.0);
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("Reset all settings?")
+                            egui::RichText::new(tr(lang, "Reset all settings?"))
                                 .strong()
                                 .size(16.0),
                         );
-                        ui.label(
+                        ui.label(tr(
+                            lang,
                             "Every setting returns to its default value. Instances, \
                              accounts and downloaded files are not affected.",
-                        );
+                        ));
                     });
                 });
                 ui.add_space(14.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                        .add(egui::Button::new(egui::RichText::new(tr(lang, "Confirm")).strong()))
                         .clicked()
                     {
                         self.settings_reset_pending = false;
                         let theme = self.settings.theme.clone();
                         self.settings = settings::Settings::default();
-                        // Keep the visual choice; the reset targets functional
-                        // settings, not the theme the user picked.
+                        // Keep the visual and language choices; the reset
+                        // targets functional settings, not how the launcher
+                        // looks or which language it speaks.
                         self.settings.theme = theme;
+                        self.settings.language = lang;
                         if let Err(e) = self.settings.save(&self.home_dir) {
                             self.notify_error("SETTINGS", format!("failed to save: {e:#}"));
                         }
                         self.reload_versions();
-                        self.play_status = "Settings reset to defaults".into();
-                        self.notify_info("Settings reset to defaults");
+                        self.play_status = tr(lang, "Settings reset to defaults").into();
+                        self.notify_info(tr(lang, "Settings reset to defaults"));
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr(lang, "Cancel")).clicked() {
                         self.settings_reset_pending = false;
                     }
                 });

@@ -11,6 +11,7 @@ use rusqlite::Connection;
 
 use crate::auth::AccountKind;
 use crate::db;
+use crate::lang::{tr, Language};
 
 /// One stored account.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,10 +162,10 @@ impl AccountStore {
     }
 
     /// Add an offline account protected by a password (Argon2id-hashed).
-    pub fn add_offline(&mut self, name: &str, password: &str) -> Result<String> {
-        let name = crate::auth::validate_username(name)?.to_string();
+    pub fn add_offline(&mut self, name: &str, password: &str, lang: Language) -> Result<String> {
+        let name = crate::auth::validate_username(name, lang)?.to_string();
         if password.is_empty() {
-            return Err(anyhow!("a password is required for an offline account"));
+            return Err(anyhow!("{}", tr(lang, "a password is required for an offline account")));
         }
         if self
             .accounts
@@ -172,7 +173,8 @@ impl AccountStore {
             .any(|a| a.kind == AccountKind::Offline && a.username.eq_ignore_ascii_case(&name))
         {
             return Err(anyhow!(
-                "an offline account with this nickname already exists"
+                "{}",
+                tr(lang, "an offline account with this nickname already exists")
             ));
         }
         let hash = db::hash_password(password)?;
@@ -339,24 +341,26 @@ mod tests {
 
     #[test]
     fn offline_add_requires_password_and_validates_name() {
+        use crate::lang::Language;
         let path = tmp_db("add");
         let mut store = AccountStore::load_from(&path).unwrap();
-        assert!(store.add_offline("Rizer001", "").is_err());
-        assert!(store.add_offline("ab", "pw").is_err());
-        let name = store.add_offline("Rizer001", "hunter2").unwrap();
+        assert!(store.add_offline("Rizer001", "", Language::English).is_err());
+        assert!(store.add_offline("ab", "pw", Language::English).is_err());
+        let name = store.add_offline("Rizer001", "hunter2", Language::English).unwrap();
         assert_eq!(name, "Rizer001");
         assert!(store.verify_offline_password("Rizer001", "hunter2"));
         assert!(!store.verify_offline_password("Rizer001", "wrong"));
-        assert!(store.add_offline("rizer001", "x").is_err()); // dup
+        assert!(store.add_offline("rizer001", "x", Language::English).is_err()); // dup
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
     fn remove_offline_after_password_and_fallback() {
+        use crate::lang::Language;
         let path = tmp_db("rm");
         let mut store = AccountStore::load_from(&path).unwrap();
-        store.add_offline("alpha", "pw1").unwrap();
-        store.add_offline("beta", "pw2").unwrap();
+        store.add_offline("alpha", "pw1", Language::English).unwrap();
+        store.add_offline("beta", "pw2", Language::English).unwrap();
         store.select("beta");
         assert!(!store.verify_offline_password("beta", "nope"));
         assert!(store.verify_offline_password("beta", "pw2"));

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::home;
 use crate::jvm;
+use crate::lang::Language;
 
 /// How much of the game output the Console tab displays (display filter
 /// only — it does not affect what is written to the log files).
@@ -37,13 +38,14 @@ impl ConsoleMode {
         ConsoleMode::Nothing,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: Language) -> &'static str {
+        use crate::lang::tr;
         match self {
-            ConsoleMode::All => "All",
-            ConsoleMode::Warnings => "Warnings",
-            ConsoleMode::Errors => "Errors",
-            ConsoleMode::ErrorsAndWarnings => "Errors + warnings",
-            ConsoleMode::Nothing => "Nothing",
+            ConsoleMode::All => tr(lang, "All"),
+            ConsoleMode::Warnings => tr(lang, "Warnings"),
+            ConsoleMode::Errors => tr(lang, "Errors"),
+            ConsoleMode::ErrorsAndWarnings => tr(lang, "Errors + warnings"),
+            ConsoleMode::Nothing => tr(lang, "Nothing"),
         }
     }
 
@@ -112,13 +114,14 @@ impl FileLogMode {
         FileLogMode::All,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: Language) -> &'static str {
+        use crate::lang::tr;
         match self {
-            FileLogMode::Nothing => "Nothing",
-            FileLogMode::Warnings => "Warnings",
-            FileLogMode::Errors => "Errors",
-            FileLogMode::WarningsAndErrors => "Warnings + errors",
-            FileLogMode::All => "All",
+            FileLogMode::Nothing => tr(lang, "Nothing"),
+            FileLogMode::Warnings => tr(lang, "Warnings"),
+            FileLogMode::Errors => tr(lang, "Errors"),
+            FileLogMode::WarningsAndErrors => tr(lang, "Warnings + errors"),
+            FileLogMode::All => tr(lang, "All"),
         }
     }
 
@@ -163,14 +166,15 @@ impl ThemePreset {
         ThemePreset::Custom,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: Language) -> &'static str {
+        use crate::lang::tr;
         match self {
-            ThemePreset::White => "White",
-            ThemePreset::Light => "Light",
-            ThemePreset::Gray => "Gray",
-            ThemePreset::Dark => "Dark",
-            ThemePreset::Black => "Black",
-            ThemePreset::Custom => "Custom",
+            ThemePreset::White => tr(lang, "White"),
+            ThemePreset::Light => tr(lang, "Light"),
+            ThemePreset::Gray => tr(lang, "Gray"),
+            ThemePreset::Dark => tr(lang, "Dark"),
+            ThemePreset::Black => tr(lang, "Black"),
+            ThemePreset::Custom => tr(lang, "Custom"),
         }
     }
 }
@@ -194,11 +198,12 @@ impl BackgroundMode {
         BackgroundMode::Image,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: Language) -> &'static str {
+        use crate::lang::tr;
         match self {
-            BackgroundMode::Color => "Color",
-            BackgroundMode::Gradient => "Gradient",
-            BackgroundMode::Image => "Image",
+            BackgroundMode::Color => tr(lang, "Color"),
+            BackgroundMode::Gradient => tr(lang, "Gradient"),
+            BackgroundMode::Image => tr(lang, "Image"),
         }
     }
 }
@@ -340,6 +345,8 @@ pub struct Settings {
     pub confirm_stop: bool,
     /// Base URL of the website (news API is `<base>/api/news`).
     pub news_url: String,
+    /// GUI language (English by default).
+    pub language: Language,
 }
 
 impl Default for Settings {
@@ -363,6 +370,7 @@ impl Default for Settings {
             confirm_kill: true,
             confirm_stop: true,
             news_url: "https://rizer001.opik.net".to_string(),
+            language: Language::default(),
         }
     }
 }

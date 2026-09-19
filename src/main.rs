@@ -20,6 +20,7 @@ mod icons;
 mod instances;
 mod java_locator;
 mod jvm;
+mod lang;
 mod launcher;
 mod logs;
 mod nbt;
@@ -168,7 +169,7 @@ fn cmd_launch(
     // Account.
     let account = match username {
         Some(name) => {
-            let account = auth::login_offline(name)?;
+            let account = auth::login_offline(name, lang::Language::English)?;
             println!("  Account:  {} (offline)", account.username);
             account
         }
@@ -217,6 +218,7 @@ fn cmd_launch(
         None,
         server,
         None,
+        lang::Language::English,
     )?;
 
     if dry_run {

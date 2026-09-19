@@ -132,7 +132,12 @@ pub fn find_compatible_java(max_version: u32) -> Option<PathBuf> {
 
 /// Pick the Java executable used for launching: explicit setting, bundled
 /// runtime, or the best match for the game's required version.
-pub fn select_java(configured: Option<&str>, required_major: Option<u32>) -> Result<PathBuf> {
+pub fn select_java(
+    configured: Option<&str>,
+    required_major: Option<u32>,
+    lang: crate::lang::Language,
+) -> Result<PathBuf> {
+    use crate::lang::{tr, tr_fmt};
     // 1. Explicitly configured path must exist.
     if let Some(path) = configured {
         if !path.trim().is_empty() {
@@ -141,8 +146,12 @@ pub fn select_java(configured: Option<&str>, required_major: Option<u32>) -> Res
                 return Ok(path);
             }
             return Err(anyhow!(
-                "configured Java path does not exist: {}",
-                path.display()
+                "{}",
+                tr_fmt(
+                    lang,
+                    "configured Java path does not exist: {0}",
+                    &[&path.display().to_string()]
+                )
             ));
         }
     }
@@ -164,14 +173,15 @@ pub fn select_java(configured: Option<&str>, required_major: Option<u32>) -> Res
         return Ok(path_java);
     }
 
-    Err(anyhow!("Java not found. Install Java or set --java-path."))
+    Err(anyhow!("{}", tr(lang, "Java not found. Install Java or set a custom path.")))
 }
 
 /// The major version of the selected Java, probed once.
-pub fn selected_java_major(java_exe: &Path) -> Result<u32> {
-    java_major_version(java_exe).context(format!(
-        "failed to probe Java version at {}",
-        java_exe.display()
+pub fn selected_java_major(java_exe: &Path, lang: crate::lang::Language) -> Result<u32> {
+    java_major_version(java_exe).context(crate::lang::tr_fmt(
+        lang,
+        "failed to probe Java version at {0}",
+        &[&java_exe.display().to_string()],
     ))
 }
 
@@ -203,7 +213,12 @@ mod tests {
 
     #[test]
     fn select_java_fails_when_configured_path_missing() {
-        let err = select_java(Some("Z:/definitely/not/real/java.exe"), None).unwrap_err();
+        let err = select_java(
+            Some("Z:/definitely/not/real/java.exe"),
+            None,
+            crate::lang::Language::English,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("does not exist"));
     }
 }

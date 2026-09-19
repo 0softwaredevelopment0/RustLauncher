@@ -4,6 +4,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 
+use crate::lang::{tr, tr_fmt, Language};
 use crate::net;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,11 +47,11 @@ impl NewsItem {
         }
     }
 
-    pub fn author_name(&self) -> &str {
+    pub fn author_name(&self, lang: Language) -> String {
         self.author
             .as_ref()
-            .map(|a| a.name.as_str())
-            .unwrap_or("Unknown")
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| tr(lang, "Unknown").to_string())
     }
 
     pub fn author_avatar(&self) -> Option<&str> {
@@ -79,30 +80,36 @@ impl NewsItem {
 }
 
 /// Default news shown when nothing was fetched yet.
-pub fn fallback_news() -> Vec<NewsItem> {
+pub fn fallback_news(lang: Language) -> Vec<NewsItem> {
     vec![
         NewsItem::new(
-            "Welcome to RustLauncher!",
-            "A fast native Minecraft launcher, rewritten in Rust. \
-             Select an account, pick a version and press Play.",
+            tr(lang, "Welcome to RustLauncher!"),
+            tr(
+                lang,
+                "A fast native Minecraft launcher, rewritten in Rust. \
+                 Select an account, pick a version and press Play.",
+            ),
             "01.01.2025",
         ),
         NewsItem::new(
-            "How to get started",
-            "1. Add your nickname in Accounts\n2. Pick a version (install one \
-             from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!",
+            tr(lang, "How to get started"),
+            tr(
+                lang,
+                "1. Add your nickname in Accounts\n2. Pick a version (install one \
+                 from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!",
+            ),
             "01.01.2025",
         ),
     ]
 }
 
 /// Fetch the news feed. Returns parsed items or an error the caller can show.
-pub fn fetch(agent: &ureq::Agent, url: &str) -> Result<Vec<NewsItem>> {
-    let body = net::get_string(agent, url)?;
-    let items: Vec<NewsItem> =
-        serde_json::from_str(&body).map_err(|e| anyhow::anyhow!("bad news format: {e}"))?;
+pub fn fetch(agent: &ureq::Agent, url: &str, lang: Language) -> Result<Vec<NewsItem>> {
+    let body = net::get_string(agent, url, lang)?;
+    let items: Vec<NewsItem> = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("{}", tr_fmt(lang, "bad news format: {0}", &[&e.to_string()])))?;
     if items.is_empty() {
-        return Err(anyhow::anyhow!("news feed is empty"));
+        return Err(anyhow::anyhow!("{}", tr(lang, "news feed is empty")));
     }
     Ok(items)
 }
@@ -127,10 +134,10 @@ mod tests {
         ]"#;
         let items: Vec<NewsItem> = serde_json::from_str(body).unwrap();
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].author_name(), "rizer001");
+        assert_eq!(items[0].author_name(crate::lang::Language::English), "rizer001");
         assert!(items[0].author_avatar().is_some());
         assert!(items[1].author.is_none());
-        assert_eq!(items[1].author_name(), "Unknown");
+        assert_eq!(items[1].author_name(crate::lang::Language::English), "Unknown");
     }
 
     #[test]
@@ -144,7 +151,8 @@ mod tests {
 
     #[test]
     fn fallback_news_is_never_empty() {
-        assert!(!fallback_news().is_empty());
-        assert!(fallback_news().iter().all(|n| !n.title.is_empty()));
+        let lang = crate::lang::Language::English;
+        assert!(!fallback_news(lang).is_empty());
+        assert!(fallback_news(lang).iter().all(|n| !n.title.is_empty()));
     }
 }

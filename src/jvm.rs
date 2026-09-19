@@ -84,13 +84,15 @@ pub fn is_heap_flag(arg: &str) -> bool {
 /// The game must not start when the flag set is empty or when either heap
 /// boundary is missing: every preset guarantees `-Xms` + `-Xmx`, and manual
 /// edits are checked here.
-pub fn validate_jvm_args(args: &[String]) -> Result<(), String> {
+pub fn validate_jvm_args(args: &[String], lang: crate::lang::Language) -> Result<(), String> {
+    use crate::lang::tr;
     if args.is_empty() {
-        return Err(
+        return Err(tr(
+            lang,
             "JVM flags are empty — the game cannot start without heap flags \
-                    (pick a preset in Settings or add -Xms/-Xmx)."
-                .to_string(),
-        );
+             (pick a preset in Settings or add -Xms/-Xmx).",
+        )
+        .to_string());
     }
     let has_xms = args.iter().any(|a| {
         let lower = a.to_ascii_lowercase();
@@ -102,9 +104,11 @@ pub fn validate_jvm_args(args: &[String]) -> Result<(), String> {
     });
     match (has_xms, has_xmx) {
         (true, true) => Ok(()),
-        (false, true) => Err("JVM flags are missing -Xms (initial heap).".to_string()),
-        (true, false) => Err("JVM flags are missing -Xmx (maximum heap).".to_string()),
-        (false, false) => Err("JVM flags are missing both -Xms and -Xmx (heap size).".to_string()),
+        (false, true) => Err(tr(lang, "JVM flags are missing -Xms (initial heap).").to_string()),
+        (true, false) => Err(tr(lang, "JVM flags are missing -Xmx (maximum heap).").to_string()),
+        (false, false) => Err(
+            tr(lang, "JVM flags are missing both -Xms and -Xmx (heap size).").to_string(),
+        ),
     }
 }
 
@@ -118,7 +122,7 @@ mod tests {
             .split_whitespace()
             .map(String::from)
             .collect();
-        validate_jvm_args(&parsed).unwrap();
+        validate_jvm_args(&parsed, crate::lang::Language::English).unwrap();
         assert_eq!(parsed.len(), 2);
     }
 
@@ -126,7 +130,7 @@ mod tests {
     fn every_preset_has_both_heap_flags_and_is_sorted() {
         for preset in PRESETS {
             let parsed: Vec<String> = preset.args.split_whitespace().map(String::from).collect();
-            validate_jvm_args(&parsed)
+            validate_jvm_args(&parsed, crate::lang::Language::English)
                 .unwrap_or_else(|e| panic!("preset {} invalid: {e}", preset.id));
             let heaps: Vec<&String> = parsed.iter().filter(|a| is_heap_flag(a)).collect();
             assert_eq!(
@@ -156,12 +160,13 @@ mod tests {
 
     #[test]
     fn validation_rejects_missing_heap_flags() {
+        use crate::lang::Language;
         let to_vec = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
-        assert!(validate_jvm_args(&to_vec("")).is_err());
-        assert!(validate_jvm_args(&to_vec("-XX:+UseG1GC")).is_err());
-        assert!(validate_jvm_args(&to_vec("-Xmx4g")).is_err());
-        assert!(validate_jvm_args(&to_vec("-Xms1m")).is_err());
-        assert!(validate_jvm_args(&to_vec("-XMS1m -XMX4g")).is_ok()); // case-insensitive
-        assert!(validate_jvm_args(&to_vec("-Xms1m -Xmx4g -XX:+UseZGC")).is_ok());
+        assert!(validate_jvm_args(&to_vec(""), Language::English).is_err());
+        assert!(validate_jvm_args(&to_vec("-XX:+UseG1GC"), Language::English).is_err());
+        assert!(validate_jvm_args(&to_vec("-Xmx4g"), Language::English).is_err());
+        assert!(validate_jvm_args(&to_vec("-Xms1m"), Language::English).is_err());
+        assert!(validate_jvm_args(&to_vec("-XMS1m -XMX4g"), Language::English).is_ok()); // case-insensitive
+        assert!(validate_jvm_args(&to_vec("-Xms1m -Xmx4g -XX:+UseZGC"), Language::English).is_ok());
     }
 }

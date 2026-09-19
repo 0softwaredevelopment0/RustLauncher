@@ -14,6 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use md5::compute as md5_compute;
 use serde::Deserialize;
 
+use crate::lang::{tr, tr_fmt, Language};
 use crate::net;
 
 /// The kind of an account.
@@ -40,9 +41,9 @@ impl AccountKind {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: crate::lang::Language) -> &'static str {
         match self {
-            AccountKind::Offline => "Offline",
+            AccountKind::Offline => crate::lang::tr(lang, "Offline"),
             AccountKind::ElyBy => "Ely.by",
             AccountKind::Mojang => "Mojang / Microsoft",
         }
@@ -107,7 +108,7 @@ struct YgProfile {
 }
 
 /// Log in to Ely.by with username + password; returns the game account.
-pub fn login_elyby(username: &str, password: &str) -> Result<Account> {
+pub fn login_elyby(username: &str, password: &str, lang: Language) -> Result<Account> {
     let agent = net::agent();
     let body = serde_json::json!({
         "agent": { "name": "Minecraft", "version": 1 },
@@ -122,7 +123,7 @@ pub fn login_elyby(username: &str, password: &str) -> Result<Account> {
         .send_string(&body.to_string())
         .map_err(|e| match e {
             ureq::Error::Status(401 | 403, _) => {
-                anyhow!("Ely.by rejected the credentials: wrong login or password")
+                anyhow!("{}", tr(lang, "Ely.by rejected the credentials: wrong login or password"))
             }
             ureq::Error::Status(code, resp) => {
                 let text = resp.into_string().unwrap_or_default();
@@ -132,19 +133,28 @@ pub fn login_elyby(username: &str, password: &str) -> Result<Account> {
                         v.get("errorMessage")
                             .and_then(|m| m.as_str().map(String::from))
                     })
-                    .unwrap_or_else(|| format!("HTTP {code} from Ely.by"));
+                    .unwrap_or_else(|| tr_fmt(lang, "HTTP {0} from Ely.by", &[&code.to_string()]));
                 anyhow!(message)
             }
-            other => anyhow!("Ely.by request failed: {other}"),
+            other => anyhow!(
+                "{}",
+                tr_fmt(lang, "Ely.by request failed: {0}", &[&other.to_string()])
+            ),
         })?;
     let parsed: YgAuthResponse = response
         .into_json()
-        .context("failed to parse the Ely.by auth response")?;
+        .context(tr(lang, "failed to parse the Ely.by auth response"))?;
     let profile = parsed.selected_profile.ok_or_else(|| {
-        anyhow!("the Ely.by account has no Minecraft profile (choose a nickname on ely.by first)")
+        anyhow!(
+            "{}",
+            tr(
+                lang,
+                "the Ely.by account has no Minecraft profile (choose a nickname on ely.by first)"
+            )
+        )
     })?;
     if parsed.access_token.is_empty() {
-        bail!("Ely.by returned no access token");
+        bail!("{}", tr(lang, "Ely.by returned no access token"));
     }
     Ok(Account {
         username: profile.name,
@@ -216,7 +226,7 @@ pub struct MicrosoftLogin {
 
 /// Start a device-code login: returns what the user must enter at the
 /// verification URL, and polls in the background via [` microsoft_poll`].
-pub fn microsoft_begin(agent: &ureq::Agent) -> Result<(String, String, u64, u64)> {
+pub fn microsoft_begin(agent: &ureq::Agent, lang: Language) -> Result<(String, String, u64, u64)> {
     let body = format!(
         "client_id={MS_CLIENT_ID}&scope=XboxLive.signin%20offline_access&response_mode=form_post"
     );
@@ -224,9 +234,14 @@ pub fn microsoft_begin(agent: &ureq::Agent) -> Result<(String, String, u64, u64)
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
         .set("Content-Type", "application/x-www-form-urlencoded")
         .send_string(&body)
-        .map_err(|e| anyhow!("Microsoft device-code request failed: {e}"))?
+        .map_err(|e| {
+            anyhow!(
+                "{}",
+                tr_fmt(lang, "Microsoft device-code request failed: {0}", &[&e.to_string()])
+            )
+        })?
         .into_json()
-        .context("failed to parse the device-code response")?;
+        .context(tr(lang, "failed to parse the device-code response"))?;
     Ok((
         response.verification_uri,
         response.user_code,
@@ -236,7 +251,11 @@ pub fn microsoft_begin(agent: &ureq::Agent) -> Result<(String, String, u64, u64)
 }
 
 /// Poll the Microsoft token endpoint once. `Ok(None)` = keep polling.
-pub fn microsoft_poll(agent: &ureq::Agent, device_code: &str) -> Result<Option<MicrosoftLogin>> {
+pub fn microsoft_poll(
+    agent: &ureq::Agent,
+    device_code: &str,
+    lang: Language,
+) -> Result<Option<MicrosoftLogin>> {
     let body = format!(
         "grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id={MS_CLIENT_ID}&device_code={device_code}"
     );
@@ -245,11 +264,11 @@ pub fn microsoft_poll(agent: &ureq::Agent, device_code: &str) -> Result<Option<M
         .set("Content-Type", "application/x-www-form-urlencoded")
         .send_string(&body)
     {
-        Ok(resp) => resp.into_json().context("bad token response")?,
+        Ok(resp) => resp.into_json().context(tr(lang, "bad token response"))?,
         Err(ureq::Error::Status(code, resp)) => {
             let text = resp.into_string().unwrap_or_default();
-            let parsed: TokenResponse =
-                serde_json::from_str(&text).context("failed to parse the token error response")?;
+            let parsed: TokenResponse = serde_json::from_str(&text)
+                .context(tr(lang, "failed to parse the token error response"))?;
             let _ = code;
             match parsed {
                 TokenResponse::Error { error, .. }
@@ -261,21 +280,36 @@ pub fn microsoft_poll(agent: &ureq::Agent, device_code: &str) -> Result<Option<M
                     error,
                     error_description,
                 } => {
-                    bail!("Microsoft login failed: {error} ({error_description})")
+                    bail!(
+                        "{}",
+                        tr_fmt(
+                            lang,
+                            "Microsoft login failed: {0} ({1})",
+                            &[&error, &error_description]
+                        )
+                    )
                 }
                 success @ TokenResponse::Success { .. } => success,
             }
         }
-        Err(e) => return Err(anyhow!("Microsoft token poll failed: {e}")),
+        Err(e) => {
+            return Err(anyhow!(
+                "{}",
+                tr_fmt(lang, "Microsoft token poll failed: {0}", &[&e.to_string()])
+            ))
+        }
     };
     let (access_token, refresh_token) = match response {
         TokenResponse::Success {
             access_token,
             refresh_token,
         } => (access_token, refresh_token),
-        TokenResponse::Error { error, .. } => bail!("Microsoft login failed: {error}"),
+        TokenResponse::Error { error, .. } => bail!(
+            "{}",
+            tr_fmt(lang, "Microsoft login failed: {0}", &[&error])
+        ),
     };
-    login_with_ms_token(agent, &access_token, refresh_token).map(Some)
+    login_with_ms_token(agent, &access_token, refresh_token, lang).map(Some)
 }
 
 /// XBL → XSTS → Minecraft profile, from a Microsoft OAuth access token.
@@ -283,6 +317,7 @@ pub fn login_with_ms_token(
     agent: &ureq::Agent,
     ms_token: &str,
     refresh_token: String,
+    lang: Language,
 ) -> Result<MicrosoftLogin> {
     // 1. XBL user token.
     let xbl: XblResponse = agent
@@ -297,9 +332,14 @@ pub fn login_with_ms_token(
             "RpsTicket": format!("d={ms_token}"),
             "Endpoint": "https://user.auth.xboxlive.com/"
         }))
-        .map_err(|e| anyhow!("Xbox Live auth failed: {e}"))?
+        .map_err(|e| {
+            anyhow!(
+                "{}",
+                tr_fmt(lang, "Xbox Live auth failed: {0}", &[&e.to_string()])
+            )
+        })?
         .into_json()
-        .context("bad XBL response")?;
+        .context(tr(lang, "bad XBL response"))?;
 
     // 2. XSTS token.
     let xsts: XblResponse = agent
@@ -321,30 +361,38 @@ pub fn login_with_ms_token(
                     .and_then(|v| v.pointer("/XErr").and_then(|x| x.as_i64()))
                     .unwrap_or(0);
                 let why = match code {
-                    2148916233 => "the Microsoft account has no Xbox profile",
-                    2148916238 => "the account is a child account",
-                    _ => "Xbox Live authorization failed",
+                    2148916233 => tr(lang, "the Microsoft account has no Xbox profile"),
+                    2148916238 => tr(lang, "the account is a child account"),
+                    _ => tr(lang, "Xbox Live authorization failed"),
                 };
-                anyhow!("{why} (XErr {code})")
+                anyhow!("{}", tr_fmt(lang, "{0} (XErr {1})", &[why, &code.to_string()]))
             }
-            other => anyhow!("XSTS auth failed: {other}"),
+            other => anyhow!(
+                "{}",
+                tr_fmt(lang, "XSTS auth failed: {0}", &[&other.to_string()])
+            ),
         })?
         .into_json()
-        .context("bad XSTS response")?;
+        .context(tr(lang, "bad XSTS response"))?;
 
     // 3. Minecraft login with XSTS.
     let mc_resp = agent
         .post("https://api.minecraftservices.com/authentication/login_with_xbox")
         .timeout(Duration::from_secs(30))
         .send_json(serde_json::json!({ "identityToken": format!("XBL3.0 x={};{}", xsts_display_claim(&xsts), xsts.token) }))
-        .map_err(|e| anyhow!("Minecraft services login failed: {e}"))?;
+        .map_err(|e| {
+            anyhow!(
+                "{}",
+                tr_fmt(lang, "Minecraft services login failed: {0}", &[&e.to_string()])
+            )
+        })?;
     let mc: serde_json::Value = mc_resp
         .into_json()
-        .context("bad Minecraft login response")?;
+        .context(tr(lang, "bad Minecraft login response"))?;
     let mc_token = mc
         .get("access_token")
         .and_then(|t| t.as_str())
-        .ok_or_else(|| anyhow!("no access_token from Minecraft services"))?
+        .ok_or_else(|| anyhow!("{}", tr(lang, "no access_token from Minecraft services")))?
         .to_string();
     let expires_in = mc.get("expires_in").and_then(|e| e.as_u64()).unwrap_or(0);
 
@@ -356,12 +404,15 @@ pub fn login_with_ms_token(
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(404, _) => {
-                anyhow!("this Microsoft account does not own Minecraft (Java)")
+                anyhow!("{}", tr(lang, "this Microsoft account does not own Minecraft (Java)"))
             }
-            other => anyhow!("failed to fetch the Minecraft profile: {other}"),
+            other => anyhow!(
+                "{}",
+                tr_fmt(lang, "failed to fetch the Minecraft profile: {0}", &[&other.to_string()])
+            ),
         })?
         .into_json()
-        .context("bad profile response")?;
+        .context(tr(lang, "bad profile response"))?;
 
     Ok(MicrosoftLogin {
         username: profile.name,
@@ -386,17 +437,18 @@ fn xsts_display_claim(xsts: &XblResponse) -> String {
 // ── Offline ───────────────────────────────────────────────────
 
 /// Validate an offline username per Minecraft rules.
-pub fn validate_username(name: &str) -> Result<&str> {
+pub fn validate_username(name: &str, lang: Language) -> Result<&str> {
     let name = name.trim();
     if name.len() < 3 {
-        return Err(anyhow!("username must be at least 3 characters"));
+        return Err(anyhow!("{}", tr(lang, "username must be at least 3 characters")));
     }
     if name.len() > 16 {
-        return Err(anyhow!("username cannot be longer than 16 characters"));
+        return Err(anyhow!("{}", tr(lang, "username cannot be longer than 16 characters")));
     }
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(anyhow!(
-            "username may only contain letters, digits, and underscores"
+            "{}",
+            tr(lang, "username may only contain letters, digits, and underscores")
         ));
     }
     Ok(name)
@@ -427,8 +479,8 @@ fn format_uuid(bytes: &[u8; 16]) -> String {
 }
 
 /// Log in offline with the given username.
-pub fn login_offline(username: &str) -> Result<Account> {
-    let name = validate_username(username)?.to_string();
+pub fn login_offline(username: &str, lang: Language) -> Result<Account> {
+    let name = validate_username(username, lang)?.to_string();
     Ok(Account {
         access_token: String::new(),
         kind: AccountKind::Offline,
@@ -443,18 +495,20 @@ mod tests {
 
     #[test]
     fn accepts_valid_usernames() {
-        assert_eq!(validate_username("Rizer001").unwrap(), "Rizer001");
-        assert_eq!(validate_username("  abc  ").unwrap(), "abc");
-        assert_eq!(validate_username("a_b_123").unwrap(), "a_b_123");
+        use crate::lang::Language;
+        assert_eq!(validate_username("Rizer001", Language::English).unwrap(), "Rizer001");
+        assert_eq!(validate_username("  abc  ", Language::English).unwrap(), "abc");
+        assert_eq!(validate_username("a_b_123", Language::English).unwrap(), "a_b_123");
     }
 
     #[test]
     fn rejects_invalid_usernames() {
-        assert!(validate_username("ab").is_err()); // too short
-        assert!(validate_username("averyveryverylongname").is_err()); // >16
-        assert!(validate_username("bad name").is_err()); // space
-        assert!(validate_username("bad-д name").is_err()); // non-ascii
-        assert!(validate_username("").is_err()); // empty
+        use crate::lang::Language;
+        assert!(validate_username("ab", Language::English).is_err()); // too short
+        assert!(validate_username("averyveryverylongname", Language::English).is_err()); // >16
+        assert!(validate_username("bad name", Language::English).is_err()); // space
+        assert!(validate_username("bad-д name", Language::English).is_err()); // non-ascii
+        assert!(validate_username("", Language::English).is_err()); // empty
     }
 
     #[test]
@@ -477,9 +531,10 @@ mod tests {
 
     #[test]
     fn login_offline_roundtrip() {
-        let account = login_offline("Rizer001").unwrap();
+        use crate::lang::Language;
+        let account = login_offline("Rizer001", Language::English).unwrap();
         assert_eq!(account.username, "Rizer001");
         assert_eq!(account.uuid, offline_uuid("Rizer001"));
-        assert!(login_offline("x").is_err());
+        assert!(login_offline("x", Language::English).is_err());
     }
 }

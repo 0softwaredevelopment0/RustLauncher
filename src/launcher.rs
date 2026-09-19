@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use crate::auth::Account;
 use crate::classpath::build_classpath;
 use crate::java_locator;
+use crate::lang::{tr, tr_fmt, Language};
 use crate::version_json::VersionJson;
 
 /// Module-access flags for modded launchers on modern JVMs.
@@ -101,7 +102,11 @@ pub fn split_server_address(addr: &str) -> (String, String) {
 
 /// Extract native libraries (`.dll/.so/.dylib`) from `*natives*.jar` files
 /// under the libraries directory into the natives directory.
-pub fn extract_natives(libraries_dir: &Path, natives_dir: &Path) -> Result<usize> {
+pub fn extract_natives(
+    libraries_dir: &Path,
+    natives_dir: &Path,
+    lang: Language,
+) -> Result<usize> {
     let mut count = 0;
     for jar in crate::classpath::collect_jars(libraries_dir) {
         let Some(name) = jar.file_name().and_then(|n| n.to_str()) else {
@@ -111,9 +116,9 @@ pub fn extract_natives(libraries_dir: &Path, natives_dir: &Path) -> Result<usize
             continue;
         }
         let file = std::fs::File::open(&jar)
-            .with_context(|| format!("failed to open {}", jar.display()))?;
+            .with_context(|| tr_fmt(lang, "failed to open {0}", &[&jar.display().to_string()]))?;
         let mut archive = zip::ZipArchive::new(file)
-            .with_context(|| format!("failed to read {}", jar.display()))?;
+            .with_context(|| tr_fmt(lang, "failed to read {0}", &[&jar.display().to_string()]))?;
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
             let entry_name = entry.name().to_string();
@@ -158,6 +163,7 @@ pub fn build_launch_plan(
     custom_java_path: Option<&str>,
     server: Option<&str>,
     resolution: Option<(u32, u32)>,
+    lang: Language,
 ) -> Result<LaunchPlan> {
     let parsed_args: Vec<String> = java_args
         .split_whitespace()
@@ -167,25 +173,28 @@ pub fn build_launch_plan(
         .collect();
     // The game cannot start without heap flags; presets guarantee them,
     // manual edits are checked here.
-    crate::jvm::validate_jvm_args(&parsed_args).map_err(|e| anyhow::anyhow!(e))?;
+    crate::jvm::validate_jvm_args(&parsed_args, lang).map_err(|e| anyhow::anyhow!(e))?;
 
     let required_major = version_json.required_java_major().or(Some(21)).or(None);
     let required_major = required_major.unwrap_or(21);
 
-    let java = java_locator::select_java(custom_java_path, Some(required_major))?;
-    let java_major = java_locator::selected_java_major(&java)?;
+    let java = java_locator::select_java(custom_java_path, Some(required_major), lang)?;
+    let java_major = java_locator::selected_java_major(&java, lang)?;
 
     let natives_dir = game_dir.join("natives");
     let assets_dir = game_dir.join("assets");
-    std::fs::create_dir_all(&natives_dir).context("failed to create natives dir")?;
-    std::fs::create_dir_all(&assets_dir).context("failed to create assets dir")?;
+    std::fs::create_dir_all(&natives_dir).context(tr(lang, "failed to create natives dir"))?;
+    std::fs::create_dir_all(&assets_dir).context(tr(lang, "failed to create assets dir"))?;
 
     let libraries_dir = game_dir.join("libraries");
     if libraries_dir.is_dir() {
-        let extracted = extract_natives(&libraries_dir, &natives_dir)
-            .context("failed to extract native libraries")?;
+        let extracted = extract_natives(&libraries_dir, &natives_dir, lang)
+            .context(tr(lang, "failed to extract native libraries"))?;
         if extracted > 0 {
-            println!("[RustLauncher] Extracted {extracted} native libraries");
+            println!(
+                "[RustLauncher] {}",
+                tr_fmt(lang, "Extracted {0} native libraries", &[&extracted.to_string()])
+            );
         }
     }
 

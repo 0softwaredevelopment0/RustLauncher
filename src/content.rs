@@ -11,6 +11,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
+use crate::lang::{tr, tr_fmt, Language};
 use crate::net;
 
 /// The kind of downloadable content.
@@ -28,16 +29,17 @@ pub enum ContentKind {
 }
 
 impl ContentKind {
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: crate::lang::Language) -> &'static str {
+        use crate::lang::tr;
         match self {
-            ContentKind::Mod => "Mods",
-            ContentKind::ResourcePack => "Resource Packs",
-            ContentKind::DataPack => "Data Packs",
-            ContentKind::Shader => "Shaders",
-            ContentKind::Plugin => "Plugins",
-            ContentKind::Modpack => "Modpacks",
-            ContentKind::Server => "Servers",
-            ContentKind::World => "Worlds",
+            ContentKind::Mod => tr(lang, "Mods"),
+            ContentKind::ResourcePack => tr(lang, "Resource Packs"),
+            ContentKind::DataPack => tr(lang, "Data Packs"),
+            ContentKind::Shader => tr(lang, "Shaders"),
+            ContentKind::Plugin => tr(lang, "Plugins"),
+            ContentKind::Modpack => tr(lang, "Modpacks"),
+            ContentKind::Server => tr(lang, "Servers"),
+            ContentKind::World => tr(lang, "Worlds"),
         }
     }
 
@@ -92,13 +94,14 @@ pub enum SortIndex {
 }
 
 impl SortIndex {
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: crate::lang::Language) -> &'static str {
+        use crate::lang::tr;
         match self {
-            SortIndex::Relevance => "Relevance",
-            SortIndex::Downloads => "Downloads",
-            SortIndex::Follows => "Follows",
-            SortIndex::Newest => "Newest",
-            SortIndex::Updated => "Updated",
+            SortIndex::Relevance => tr(lang, "Relevance"),
+            SortIndex::Downloads => tr(lang, "Downloads"),
+            SortIndex::Follows => tr(lang, "Follows"),
+            SortIndex::Newest => tr(lang, "Newest"),
+            SortIndex::Updated => tr(lang, "Updated"),
         }
     }
 
@@ -318,6 +321,7 @@ pub fn search_modrinth(
     license: Option<&str>,
     sort: SortIndex,
     limit: usize,
+    lang: Language,
 ) -> Result<Vec<ContentItem>> {
     // One facet group per dimension; values inside a group are OR, groups
     // are AND (documented Labrinth behavior).
@@ -350,9 +354,9 @@ pub fn search_modrinth(
     if !query.trim().is_empty() {
         url.push_str(&format!("&query={}", urlquery(query.trim())));
     }
-    let body = net::get_string(agent, &url)?;
+    let body = net::get_string(agent, &url, lang)?;
     let parsed: ModrinthSearch =
-        serde_json::from_str(&body).context("failed to parse the Modrinth search response")?;
+        serde_json::from_str(&body).context(tr(lang, "failed to parse the Modrinth search response"))?;
     Ok(parsed
         .hits
         .into_iter()
@@ -372,13 +376,14 @@ pub fn search_modrinth(
 }
 
 /// Fetch the full project page of a Modrinth project.
-pub fn modrinth_project(agent: &ureq::Agent, project_id: &str) -> Result<ProjectDetail> {
+pub fn modrinth_project(agent: &ureq::Agent, project_id: &str, lang: Language) -> Result<ProjectDetail> {
     let body = net::get_string(
         agent,
         &format!("https://api.modrinth.com/v2/project/{project_id}"),
+        lang,
     )?;
     let parsed: ModrinthProject =
-        serde_json::from_str(&body).context("failed to parse the Modrinth project")?;
+        serde_json::from_str(&body).context(tr(lang, "failed to parse the Modrinth project"))?;
     Ok(ProjectDetail {
         title: parsed.title,
         description: parsed.description,
@@ -402,6 +407,7 @@ pub fn modrinth_versions(
     project_id: &str,
     mc: &str,
     loader: Option<&str>,
+    lang: Language,
 ) -> Result<Vec<ContentFile>> {
     let mut url = format!("https://api.modrinth.com/v2/project/{project_id}/version");
     if !mc.is_empty() {
@@ -410,9 +416,9 @@ pub fn modrinth_versions(
             url.push_str(&format!("&loaders=[%22{}%22]", urlquery(loader)));
         }
     }
-    let body = net::get_string(agent, &url)?;
+    let body = net::get_string(agent, &url, lang)?;
     let parsed: Vec<ModrinthVersion> =
-        serde_json::from_str(&body).context("failed to parse the Modrinth versions response")?;
+        serde_json::from_str(&body).context(tr(lang, "failed to parse the Modrinth versions response"))?;
     Ok(parsed
         .into_iter()
         .map(|v| {
@@ -574,14 +580,19 @@ pub enum VersionSort {
 }
 
 impl VersionSort {
-    pub fn label(self) -> String {
+    pub fn label(self, lang: crate::lang::Language) -> String {
+        use crate::lang::{tr, tr_fmt};
         match self {
-            VersionSort::Newest => "Newest".to_string(),
-            VersionSort::Oldest => "Oldest".to_string(),
-            VersionSort::NumberDesc => format!("Number {}", crate::icons::ARROW_DOWNWARD),
-            VersionSort::NumberAsc => format!("Number {}", crate::icons::ARROW_UPWARD),
-            VersionSort::NameAZ => format!("A {} Z", crate::icons::ARROW_FORWARD),
-            VersionSort::NameZA => format!("Z {} A", crate::icons::ARROW_FORWARD),
+            VersionSort::Newest => tr(lang, "Newest").to_string(),
+            VersionSort::Oldest => tr(lang, "Oldest").to_string(),
+            VersionSort::NumberDesc => {
+                tr_fmt(lang, "Number {0}", &[crate::icons::ARROW_DOWNWARD])
+            }
+            VersionSort::NumberAsc => {
+                tr_fmt(lang, "Number {0}", &[crate::icons::ARROW_UPWARD])
+            }
+            VersionSort::NameAZ => tr_fmt(lang, "A {0} Z", &[crate::icons::ARROW_FORWARD]),
+            VersionSort::NameZA => tr_fmt(lang, "Z {0} A", &[crate::icons::ARROW_FORWARD]),
         }
     }
 
@@ -640,11 +651,12 @@ pub fn download_file(
     game_dir: &Path,
     kind: ContentKind,
     file: &ContentFile,
+    lang: Language,
 ) -> Result<std::path::PathBuf> {
     if file.url.is_empty() {
-        return Err(anyhow!("the file has no download URL"));
+        return Err(anyhow!("{}", tr(lang, "the file has no download URL")));
     }
-    let bytes = net::get_bytes(agent, &file.url)?;
+    let bytes = net::get_bytes(agent, &file.url, lang)?;
     let file_name = if file.file_name.is_empty() {
         // Derive from the URL tail.
         file.url
@@ -664,24 +676,26 @@ pub fn download_file(
         let stem = file_name.trim_end_matches(".zip").trim_end_matches(".ZIP");
         let world_dir = dir.join(stem);
         std::fs::create_dir_all(&world_dir)?;
-        extract_zip(&bytes, &world_dir)?;
+        extract_zip(&bytes, &world_dir, lang)?;
         return Ok(world_dir);
     }
 
     let dest = dir.join(&file_name);
-    std::fs::write(&dest, &bytes).with_context(|| format!("failed to write {}", dest.display()))?;
+    std::fs::write(&dest, &bytes)
+        .with_context(|| tr_fmt(lang, "failed to write {0}", &[&dest.display().to_string()]))?;
     Ok(dest)
 }
 
 /// Extract a zip archive into `dest` (used for world saves).
-fn extract_zip(bytes: &[u8], dest: &Path) -> Result<usize> {
+fn extract_zip(bytes: &[u8], dest: &Path, lang: Language) -> Result<usize> {
     let reader = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(reader).context("failed to open the zip archive")?;
+    let mut archive =
+        zip::ZipArchive::new(reader).context(tr(lang, "failed to open the zip archive"))?;
     let mut count = 0usize;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
-            .with_context(|| format!("bad zip entry {i}"))?;
+            .with_context(|| tr_fmt(lang, "bad zip entry {0}", &[&i.to_string()]))?;
         let Some(name) = entry.enclosed_name() else {
             continue; // skip unsafe paths
         };
@@ -698,7 +712,7 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<usize> {
         }
     }
     if count == 0 {
-        return Err(anyhow!("the archive contained no files"));
+        return Err(anyhow!("{}", tr(lang, "the archive contained no files")));
     }
     Ok(count)
 }
@@ -860,7 +874,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("rl-world-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
-        let n = extract_zip(&bytes, &tmp).unwrap();
+        let n = extract_zip(&bytes, &tmp, crate::lang::Language::English).unwrap();
         assert_eq!(n, 1);
         assert!(tmp.join("world/level.dat").is_file());
         let _ = std::fs::remove_dir_all(&tmp);

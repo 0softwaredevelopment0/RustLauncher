@@ -14,6 +14,7 @@ use crate::auth::{self, AccountKind};
 use crate::home;
 use crate::icons;
 use crate::instances;
+use crate::lang::{tr, tr_fmt};
 use crate::launcher;
 use crate::launcher::LaunchPlan;
 use crate::logs::SessionLog;
@@ -161,13 +162,14 @@ impl App {
 
     /// Ask for a destination and write the whole console buffer there.
     pub(crate) fn export_console(&mut self) {
+        let lang = self.settings.language;
         let default_name = format!(
             "console-{}.log",
             chrono::Local::now().format("%Y%m%d_%H%M%S")
         );
         let Some(path) = rfd::FileDialog::new()
             .set_file_name(&default_name)
-            .add_filter("Log files", &["log", "txt"])
+            .add_filter(tr(lang, "Log files"), &["log", "txt"])
             .save_file()
         else {
             return; // user cancelled
@@ -178,12 +180,15 @@ impl App {
         };
         match std::fs::write(&path, text) {
             Ok(()) => {
-                let msg = format!("Console exported to {}", path.display());
+                let msg = tr_fmt(lang, "Console exported to {0}", &[&path.display().to_string()]);
                 self.log_console(msg.clone());
                 self.notify_info(msg);
             }
             Err(e) => {
-                self.notify_error("EXPORT", format!("console export failed: {e:#}"));
+                self.notify_error(
+                    "EXPORT",
+                    tr_fmt(lang, "console export failed: {0}", &[&format!("{e:#}")]),
+                );
             }
         }
     }
@@ -246,10 +251,11 @@ impl App {
             base.truncate(base.len() - "/news".len());
         }
         let url = format!("{base}/api/news");
+        let lang = self.settings.language;
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
-                news::fetch(&agent, &url)
+                news::fetch(&agent, &url, lang)
             },
             |app, result| {
                 app.news = Some(result.map_err(|e| e.to_string()));
@@ -310,30 +316,42 @@ impl App {
 
     pub(crate) fn start_game(&mut self) {
         self.launch_error = None;
+        let lang = self.settings.language;
 
         let Some(instance) = self.instance_store.get(&self.launch_instance).cloned() else {
-            self.launch_error =
-                Some("No instance selected. Create one on the Instances tab first.".into());
+            self.launch_error = Some(
+                tr(
+                    lang,
+                    "No instance selected. Create one on the Instances tab first.",
+                )
+                .into(),
+            );
             self.screen = Screen::Instances;
             return;
         };
         // One live process per instance: launching twice would corrupt the
         // instance's saves/session data.
         if self.instance_running(&instance.name) {
-            self.play_status = format!("{} is already running", instance.name);
+            self.play_status = tr_fmt(lang, "{0} is already running", &[&instance.name]);
             return;
         }
         let game_dir = PathBuf::from(instance.game_dir.trim());
 
         if game_dir.to_string_lossy().trim().is_empty() {
-            self.launch_error =
-                Some("The instance has no game directory. Edit it on the Instances tab.".into());
+            self.launch_error = Some(
+                tr(
+                    lang,
+                    "The instance has no game directory. Edit it on the Instances tab.",
+                )
+                .into(),
+            );
             return;
         }
         if !game_dir.is_dir() {
-            self.launch_error = Some(format!(
-                "Instance game directory does not exist: {}",
-                game_dir.display()
+            self.launch_error = Some(tr_fmt(
+                lang,
+                "Instance game directory does not exist: {0}",
+                &[&game_dir.display().to_string()],
             ));
             return;
         }
@@ -346,7 +364,7 @@ impl App {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        if let Err(e) = crate::jvm::validate_jvm_args(&flags) {
+        if let Err(e) = crate::jvm::validate_jvm_args(&flags, lang) {
             self.launch_error = Some(e);
             self.screen = Screen::Settings;
             return;
@@ -355,9 +373,12 @@ impl App {
         // Custom Java mode must have an actual path.
         if self.settings.use_custom_java && self.settings.java_path.trim().is_empty() {
             self.launch_error = Some(
-                "Custom Java is selected but the Java path is empty. Pick a java executable \
-                 in Settings or switch back to Default."
-                    .into(),
+                tr(
+                    lang,
+                    "Custom Java is selected but the Java path is empty. Pick a java executable \
+                     in Settings or switch back to Default.",
+                )
+                .into(),
             );
             self.screen = Screen::Settings;
             return;
@@ -367,16 +388,22 @@ impl App {
             Some(account) => account,
             None => {
                 self.launch_error = Some(
-                    "No account selected. Add one on the Accounts screen (or type a name there)."
-                        .into(),
+                    tr(
+                        lang,
+                        "No account selected. Add one on the Accounts screen (or type a name there).",
+                    )
+                    .into(),
                 );
                 return;
             }
         };
         let Some(version) = self.selected_version().cloned() else {
             self.launch_error = Some(
-                "No version selected. Install one on the Catalog screen or scan your game dir."
-                    .into(),
+                tr(
+                    lang,
+                    "No version selected. Install one on the Catalog screen or scan your game dir.",
+                )
+                .into(),
             );
             return;
         };
@@ -412,8 +439,16 @@ impl App {
 
         running.store(true, Ordering::SeqCst);
         self.screen = Screen::Console;
-        self.play_status = format!("Launching {} ({}) …", version.name, instance.name);
-        self.notify_info(format!("Starting {} ({}) …", version.name, instance.name));
+        self.play_status = tr_fmt(
+            lang,
+            "Launching {0} ({1}) …",
+            &[&version.name, &instance.name],
+        );
+        self.notify_info(tr_fmt(
+            lang,
+            "Starting {0} ({1}) …",
+            &[&version.name, &instance.name],
+        ));
 
         self.spawn_job(
             move || {
@@ -433,29 +468,35 @@ impl App {
                     *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{e:#}"));
                 }
                 if let Ok(code) = &result {
+                    let lang = settings.language;
                     *status.lock().unwrap_or_else(|e| e.into_inner()) = if *code == 0 {
-                        "exited normally".to_string()
+                        tr(lang, "exited normally").to_string()
                     } else {
-                        format!("exited with code {code}")
+                        tr_fmt(lang, "exited with code {0}", &[&code.to_string()])
                     };
                 }
                 result
             },
             move |app, result: Result<i32>| {
                 let instance = instance.name.clone();
+                let lang = app.settings.language;
                 match result {
                     Ok(code) => {
                         app.play_status = if code == 0 {
-                            format!("{} exited normally", instance)
+                            tr_fmt(lang, "{0} exited normally", &[&instance])
                         } else {
-                            format!("{} exited with code {code}", instance)
+                            tr_fmt(lang, "{0} exited with code {1}", &[&instance, &code.to_string()])
                         };
                         if code == 0 {
-                            app.notify_info(format!("{} stopped", instance));
+                            app.notify_info(tr_fmt(lang, "{0} stopped", &[&instance]));
                         } else {
                             app.notify_error(
                                 "GAME-EXIT",
-                                format!("{} exited with code {code}", instance),
+                                tr_fmt(
+                                    lang,
+                                    "{0} exited with code {1}",
+                                    &[&instance, &code.to_string()],
+                                ),
                             );
                         }
                     }
@@ -491,6 +532,7 @@ impl App {
 
     /// Record a launcher error: to the launcher log, console and as a toast.
     pub(crate) fn notify_error(&mut self, code: &str, message: impl std::fmt::Display) {
+        let lang = self.settings.language;
         let line = format!("[ERROR {code}] {message}");
         self.log_launcher_line(&line);
         self.log_console(line.clone());
@@ -504,7 +546,7 @@ impl App {
             .and_then(|p| tail_lines(p, crate::notifications::TOAST_MAX_LOG_LINES));
 
         self.toasts.push(Toast::error(
-            "An error occurred",
+            tr(lang, "An error occurred"),
             Some(code.to_string()),
             detail,
             full_log,
@@ -625,6 +667,7 @@ impl App {
                     expanded,
                     expand_progress,
                     full_log.as_deref(),
+                    self.settings.language,
                 )
             })
             .inner;
@@ -640,7 +683,7 @@ impl App {
         // Legacy single-game Stop: act on the most recently started game.
         let pid = *self.game_pid.lock().unwrap_or_else(|e| e.into_inner());
         self.stop_pid(pid);
-        self.play_status = "Stop requested".into();
+        self.play_status = tr(self.settings.language, "Stop requested").into();
     }
 
     /// Politely stop a specific running game by PID (posts WM_CLOSE; the JVM
@@ -654,36 +697,55 @@ impl App {
     }
 
     pub(crate) fn stop_pid(&mut self, pid: Option<u32>) {
+        let lang = self.settings.language;
         if let Some(pid) = pid {
             match std::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string()])
                 .output()
             {
                 Ok(_) => {
-                    self.log_console(format!("[RustLauncher] Stop requested (PID {pid})"));
-                    self.notify_info("Stopping game…");
+                    self.log_console(format!(
+                        "[RustLauncher] {}",
+                        tr_fmt(lang, "Stop requested (PID {0})", &[&pid.to_string()])
+                    ));
+                    self.notify_info(tr(lang, "Stopping game…"));
                 }
                 Err(e) => {
-                    self.log_console(format!("[RustLauncher] Stop failed: {e}"));
+                    self.log_console(format!(
+                        "[RustLauncher] {}",
+                        tr_fmt(lang, "Stop failed: {0}", &[&e.to_string()])
+                    ));
                     self.notify_error("STOP", format!("{e:#}"));
                 }
             }
         } else {
-            self.log_console("[RustLauncher] Stop: no running game process");
+            self.log_console(format!(
+                "[RustLauncher] {}",
+                tr(lang, "Stop: no running game process")
+            ));
         }
     }
 
     /// The Stop/Kill confirmation dialog: material warning triangle,
     /// a "don't ask again" checkbox, and Confirm / Cancel buttons.
     pub(crate) fn show_terminate_confirmation(&mut self, ctx: &egui::Context, kind: TerminateKind) {
+        let lang = self.settings.language;
         let (title, body) = match kind {
             TerminateKind::Stop => (
-                "Stop the game?",
-                "The game will be asked to close. It usually exits within a few seconds, but unsaved progress may be lost.",
+                tr(lang, "Stop the game?").to_string(),
+                tr(
+                    lang,
+                    "The game will be asked to close. It usually exits within a few seconds, but unsaved progress may be lost.",
+                )
+                .to_string(),
             ),
             TerminateKind::Kill => (
-                "Force kill the game?",
-                "The game process tree will be terminated immediately. Unsaved progress will be lost.",
+                tr(lang, "Force kill the game?").to_string(),
+                tr(
+                    lang,
+                    "The game process tree will be terminated immediately. Unsaved progress will be lost.",
+                )
+                .to_string(),
             ),
         };
         let screen = ctx.screen_rect();
@@ -708,7 +770,7 @@ impl App {
         // lives on App so it survives across frames while open (it is
         // reset when the dialog opens, see the Stop/Kill click handlers).
         let kill_confirmed = kind == TerminateKind::Kill;
-        egui::Window::new(egui::RichText::new("Confirm").strong())
+        egui::Window::new(egui::RichText::new(tr(lang, "Confirm")).strong())
             .id(egui::Id::new("terminate_confirm_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -729,12 +791,14 @@ impl App {
                 });
 
                 ui.add_space(10.0);
-                ui.checkbox(&mut self.terminate_dont_ask, "Don't ask again");
+                ui.checkbox(&mut self.terminate_dont_ask, tr(lang, "Don't ask again"));
 
                 ui.add_space(10.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(egui::Button::new(egui::RichText::new("Confirm").strong()))
+                        .add(egui::Button::new(
+                            egui::RichText::new(tr(lang, "Confirm")).strong(),
+                        ))
                         .clicked()
                     {
                         self.terminate_confirm = None;
@@ -751,7 +815,7 @@ impl App {
                             self.stop_game();
                         }
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr(lang, "Cancel")).clicked() {
                         self.terminate_confirm = None;
                     }
                 });
@@ -762,7 +826,7 @@ impl App {
     pub(crate) fn kill_game(&mut self) {
         let pid = *self.game_pid.lock().unwrap_or_else(|e| e.into_inner());
         self.kill_pid(pid);
-        self.play_status = "Kill issued".into();
+        self.play_status = tr(self.settings.language, "Kill issued").into();
     }
 
     /// Force-kill a specific running game (Instances tab).
@@ -775,9 +839,15 @@ impl App {
     }
 
     pub(crate) fn kill_pid(&mut self, pid: Option<u32>) {
+        let lang = self.settings.language;
         if let Some(pid) = pid {
             self.log_console(format!(
-                "[RustLauncher] Kill: terminating PID {pid} and its child processes"
+                "[RustLauncher] {}",
+                tr_fmt(
+                    lang,
+                    "Kill: terminating PID {0} and its child processes",
+                    &[&pid.to_string()]
+                )
             ));
             match std::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
@@ -785,21 +855,33 @@ impl App {
             {
                 Ok(out) => {
                     if out.status.success() {
-                        self.log_console("[RustLauncher] Game process tree terminated");
-                        self.notify_info("Game killed");
+                        self.log_console(format!(
+                            "[RustLauncher] {}",
+                            tr(lang, "Game process tree terminated")
+                        ));
+                        self.notify_info(tr(lang, "Game killed"));
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                        self.log_console(format!("[RustLauncher] taskkill failed: {stderr}"));
+                        self.log_console(format!(
+                            "[RustLauncher] {}",
+                            tr_fmt(lang, "taskkill failed: {0}", &[&stderr])
+                        ));
                         self.notify_error("KILL", stderr);
                     }
                 }
                 Err(e) => {
-                    self.log_console(format!("[RustLauncher] Kill failed: {e}"));
+                    self.log_console(format!(
+                        "[RustLauncher] {}",
+                        tr_fmt(lang, "Kill failed: {0}", &[&e.to_string()])
+                    ));
                     self.notify_error("KILL", format!("{e:#}"));
                 }
             }
         } else {
-            self.log_console("[RustLauncher] Kill: no running game process");
+            self.log_console(format!(
+                "[RustLauncher] {}",
+                tr(lang, "Kill: no running game process")
+            ));
         }
     }
 
@@ -1013,6 +1095,7 @@ pub(crate) fn run_game_process(
         } else {
             None
         },
+        settings.language,
     )?;
 
     if file_log != settings::FileLogMode::Nothing {
@@ -1021,7 +1104,17 @@ pub(crate) fn run_game_process(
                 *game_log.lock().unwrap_or_else(|e| e.into_inner()) = Some(log);
             }
             Err(e) => {
-                push_line(&console, format!("[RustLauncher] log file failed: {e:#}"));
+                push_line(
+                    &console,
+                    format!(
+                        "[RustLauncher] {}",
+                        tr_fmt(
+                            settings.language,
+                            "log file failed: {0}",
+                            &[&format!("{e:#}")]
+                        )
+                    ),
+                );
             }
         }
     }
@@ -1029,13 +1122,23 @@ pub(crate) fn run_game_process(
     push_line(
         &console,
         format!(
-            "[RustLauncher] Launching {} with {}",
-            version.name,
-            plan.java.display()
+            "[RustLauncher] {}",
+            tr_fmt(
+                settings.language,
+                "Launching {0} with {1}",
+                &[&version.name, &plan.java.display().to_string()]
+            )
         ),
     );
 
-    let code = spawn_and_stream(&plan, console, game_pid, game_log.clone(), file_log)?;
+    let code = spawn_and_stream(
+        &plan,
+        console,
+        game_pid,
+        game_log.clone(),
+        file_log,
+        settings.language,
+    )?;
     *game_log.lock().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(code)
 }
@@ -1046,6 +1149,7 @@ pub(crate) fn spawn_and_stream(
     game_pid: Arc<Mutex<Option<u32>>>,
     game_log: Arc<Mutex<Option<SessionLog>>>,
     file_log: settings::FileLogMode,
+    lang: crate::lang::Language,
 ) -> Result<i32> {
     use std::io::BufRead;
     use std::process::{Command, Stdio};
@@ -1056,13 +1160,19 @@ pub(crate) fn spawn_and_stream(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("failed to start {}", plan.java.display()))?;
+        .with_context(|| {
+            tr_fmt(
+                lang,
+                "failed to start {0}",
+                &[&plan.java.display().to_string()],
+            )
+        })?;
 
     // Publish the PID so Stop/Kill can act on it.
     *game_pid.lock().unwrap_or_else(|e| e.into_inner()) = Some(child.id());
 
-    let stdout = child.stdout.take().context("no stdout")?;
-    let stderr = child.stderr.take().context("no stderr")?;
+    let stdout = child.stdout.take().context(tr(lang, "no stdout"))?;
+    let stderr = child.stderr.take().context(tr(lang, "no stderr"))?;
 
     let drain = |stream: Box<dyn std::io::Read + Send>| {
         let console = console.clone();

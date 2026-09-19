@@ -16,6 +16,7 @@ pub(crate) fn toast_body(
     expanded: bool,
     expand_progress: f32,
     full_log: Option<&str>,
+    lang: crate::lang::Language,
 ) -> (bool, bool, egui::Vec2) {
     // The ✕ zone's rect, recorded while drawing the header row.
     let cross_rect = std::cell::Cell::new(egui::Rect::NOTHING);
@@ -117,9 +118,9 @@ pub(crate) fn toast_body(
 
                 ui.label(
                     egui::RichText::new(if expanded {
-                        "▲ click to collapse"
+                        crate::lang::tr(lang, "▲ click to collapse")
                     } else {
-                        "▼ click to expand log"
+                        crate::lang::tr(lang, "▼ click to expand log")
                     })
                     .small()
                     .weak(),

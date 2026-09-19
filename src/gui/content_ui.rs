@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 
 use crate::content;
 use crate::icons;
+use crate::lang::{tr, tr_fmt};
 use crate::updater;
 
 use super::state::{
@@ -18,7 +19,8 @@ impl App {
     /// game directory. Tab state is accessed via `self.tab(platform)` to keep
     /// borrow conflicts out of the render closures.
     pub(crate) fn ui_content(&mut self, ui: &mut egui::Ui, platform: ContentPlatform) {
-        ui.heading("Modrinth");
+        let lang = self.settings.language;
+        ui.heading(tr(lang, "Modrinth"));
         ui.add_space(4.0);
 
         // Content kind tabs: mods are the default, the rest follow the
@@ -34,14 +36,14 @@ impl App {
                 content::ContentKind::Server,
                 content::ContentKind::World,
             ] {
-                ui.selectable_value(self.tab(platform).kind_slot(), kind, kind.label());
+                ui.selectable_value(self.tab(platform).kind_slot(), kind, kind.label(lang));
             }
         });
         ui.horizontal(|ui| {
             draw_search_icon(ui, 16.0, ui.visuals().text_color());
             let response = ui.add(
                 egui::TextEdit::singleline(self.tab(platform).search_slot())
-                    .hint_text("Search…")
+                    .hint_text(tr(lang, "Search…"))
                     .desired_width(260.0),
             );
             let target_mc = base_mc_of(&self.settings.selected_version);
@@ -57,13 +59,17 @@ impl App {
             if kind_uses_loader(self.tab(platform).kind) {
                 ui.separator();
                 let loader_filter = self.tab(platform).loader_filter;
-                ui.selectable_value(self.tab(platform).loader_slot(), None, "any loader");
+                ui.selectable_value(
+                    self.tab(platform).loader_slot(),
+                    None,
+                    tr(lang, "any loader"),
+                );
                 for l in updater::Loader::ALL {
                     ui.selectable_value(self.tab(platform).loader_slot(), Some(l), l.label());
                 }
                 let _ = loader_filter;
             }
-            let search_pressed = ui.button("Search").clicked()
+            let search_pressed = ui.button(tr(lang, "Search")).clicked()
                 || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if search_pressed {
                 let tab = self.tab(platform);
@@ -109,6 +115,7 @@ impl App {
                         license.as_deref(),
                         sort,
                         30,
+                        lang,
                     )
                     .map_err(|e| e.to_string())
                 },
@@ -123,7 +130,7 @@ impl App {
         // Read-only snapshot of the state needed to render the results.
         let state = self.tab(platform).snapshot();
         let Some(results) = &state.results else {
-            ui.weak("Type a query and press Search.");
+            ui.weak(tr(lang, "Type a query and press Search."));
             return;
         };
         let items = match results {
@@ -132,7 +139,7 @@ impl App {
                 return;
             }
             Ok(items) if items.is_empty() => {
-                ui.weak("Nothing found.");
+                ui.weak(tr(lang, "Nothing found."));
                 return;
             }
             Ok(items) => items,
@@ -145,14 +152,14 @@ impl App {
             let mc_w = ui.available_width() * 0.13;
             ui.add(
                 egui::TextEdit::singleline(&mut self.content_mc_filter)
-                    .hint_text("any")
+                    .hint_text(tr(lang, "any"))
                     .desired_width(mc_w),
             );
             if platform == ContentPlatform::Modrinth {
                 ui.separator();
-                ui.weak("Sort:");
+                ui.weak(tr(lang, "Sort:"));
                 egui::ComboBox::from_id_salt("content_sort")
-                    .selected_text(state.sort.label())
+                    .selected_text(state.sort.label(lang))
                     .width(110.0)
                     .show_ui(ui, |ui| {
                         for s in [
@@ -162,24 +169,28 @@ impl App {
                             content::SortIndex::Newest,
                             content::SortIndex::Updated,
                         ] {
-                            ui.selectable_value(&mut self.tab(platform).sort, s, s.label());
+                            ui.selectable_value(&mut self.tab(platform).sort, s, s.label(lang));
                         }
                     });
-                if ui.button("Apply").clicked() {
+                if ui.button(tr(lang, "Apply")).clicked() {
                     self.tab(platform).results = None; // re-run the search
                 }
                 ui.separator();
-                ui.weak("License:");
+                ui.weak(tr(lang, "License:"));
                 egui::ComboBox::from_id_salt("content_license")
                     .selected_text(
                         self.tab(platform)
                             .license_filter
                             .clone()
-                            .unwrap_or_else(|| "any".into()),
+                            .unwrap_or_else(|| tr(lang, "any").into()),
                     )
                     .width(110.0)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.tab(platform).license_filter, None, "any");
+                        ui.selectable_value(
+                            &mut self.tab(platform).license_filter,
+                            None,
+                            tr(lang, "any"),
+                        );
                         for lic in COMMON_LICENSES {
                             ui.selectable_value(
                                 &mut self.tab(platform).license_filter,
@@ -205,7 +216,7 @@ impl App {
                         }
                     }
                 }
-                if ui.button("Clear").clicked() {
+                if ui.button(tr(lang, "Clear")).clicked() {
                     let tab = self.tab(platform);
                     tab.category_filter.clear();
                     tab.license_filter = None;
@@ -227,7 +238,7 @@ impl App {
                         let url_task = item.icon_url.clone();
                         let url_key = item.icon_url.clone();
                         self.spawn_job(
-                            move || fetch_icon_rgba(&url_task).map_err(|e| e.to_string()),
+                            move || fetch_icon_rgba(&url_task, lang).map_err(|e| e.to_string()),
                             move |app, result| match result {
                                 Ok((rgba, w, h)) => {
                                     let img = egui::ColorImage::from_rgba_unmultiplied(
@@ -287,9 +298,15 @@ impl App {
                         egui::Color32::TRANSPARENT,
                     );
                     let galley_sub = ui.painter().layout(
-                        format!(
-                            "by {} \u{b7} down {} \u{2665} {} [{}]",
-                            item.author, item.downloads, item.follows, item.license
+                        tr_fmt(
+                            lang,
+                            "by {0} · down {1} ♥ {2} [{3}]",
+                            &[
+                                &item.author,
+                                &item.downloads.to_string(),
+                                &item.follows.to_string(),
+                                &item.license,
+                            ],
                         ),
                         egui::FontId::proportional(11.0),
                         ui.visuals().weak_text_color(),
@@ -334,6 +351,7 @@ impl App {
         state: &ContentSnapshot,
         installing: bool,
     ) {
+        let lang = self.settings.language;
         // Dim behind the overlay. Foreground sits above all panels.
         egui::Area::new(egui::Id::new("content_page_dim"))
             .order(egui::Order::Foreground)
@@ -363,7 +381,7 @@ impl App {
                 ui.set_min_width(ui.available_width());
                 // Top bar: back arrow + title + author + stats.
                 ui.horizontal(|ui| {
-                    let back = ui.button(format!("{} Back", icons::ARROW_BACK));
+                    let back = ui.button(format!("{} {}", icons::ARROW_BACK, tr(lang, "Back")));
                     if back.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         self.tab(platform).open_project = None;
                     }
@@ -385,14 +403,17 @@ impl App {
                     }
                     ui.vertical(|ui| {
                         ui.heading(&item.title);
-                        ui.weak(format!(
-                            "by {} · {} {} · {} {} · [{}]",
-                            item.author,
-                            icons::ARROW_DOWNWARD,
-                            item.downloads,
-                            icons::FAVORITE,
-                            item.follows,
-                            item.license
+                        ui.weak(tr_fmt(
+                            lang,
+                            "by {0} · {1} {2} · {3} {4} · [{5}]",
+                            &[
+                                &item.author,
+                                icons::ARROW_DOWNWARD,
+                                &item.downloads.to_string(),
+                                icons::FAVORITE,
+                                &item.follows.to_string(),
+                                &item.license,
+                            ],
                         ));
                     });
                 });
@@ -416,6 +437,7 @@ impl App {
         installing: bool,
     ) {
         let project_id = item.id.clone();
+        let lang = self.settings.language;
 
         // Fetch versions once.
         if !state.files.contains_key(&project_id) && !state.files_loading {
@@ -434,6 +456,7 @@ impl App {
                         &id_task,
                         &mc,
                         loader.as_deref(),
+                        lang,
                     )
                     .map_err(|e| e.to_string())
                 },
@@ -450,7 +473,7 @@ impl App {
             let id_key = project_id.clone();
             self.spawn_job(
                 move || {
-                    content::modrinth_project(&crate::net::agent(), &id_task)
+                    content::modrinth_project(&crate::net::agent(), &id_task, lang)
                         .map_err(|e| e.to_string())
                 },
                 move |app, result| {
@@ -483,14 +506,14 @@ impl App {
         }
 
         ui.add_space(4.0);
-        ui.strong("Versions");
+        ui.strong(tr(lang, "Versions"));
         let files_state = state.files.get(&project_id);
         match files_state {
             None => {
-                ui.weak("Loading versions...");
+                ui.weak(tr(lang, "Loading versions..."));
             }
             Some(None) => {
-                ui.weak("No versions.");
+                ui.weak(tr(lang, "No versions."));
             }
             Some(Some(Err(e))) => {
                 ui.colored_label(egui::Color32::YELLOW, e.to_string());
@@ -498,16 +521,16 @@ impl App {
             Some(Some(Ok(files))) => {
                 // Sort + filter controls.
                 ui.horizontal_wrapped(|ui| {
-                    ui.weak("Sort:");
+                    ui.weak(tr(lang, "Sort:"));
                     egui::ComboBox::from_id_salt(("vsort", project_id.as_str()))
-                        .selected_text(self.tab(platform).version_sort.label())
+                        .selected_text(self.tab(platform).version_sort.label(lang))
                         .width(100.0)
                         .show_ui(ui, |ui| {
                             for s in content::VersionSort::ALL {
                                 ui.selectable_value(
                                     self.tab(platform).version_sort_slot(),
                                     s,
-                                    s.label(),
+                                    s.label(lang),
                                 );
                             }
                         });
@@ -515,15 +538,15 @@ impl App {
                     ui.weak("MC:");
                     ui.add(
                         egui::TextEdit::singleline(self.tab(platform).version_mc_slot())
-                            .hint_text("any")
+                            .hint_text(tr(lang, "any"))
                             .desired_width(110.0),
                     );
                     ui.separator();
                     // Release/Beta/Alpha chips.
                     for (label, value, color) in [
-                        ("Release", "release", egui::Color32::from_rgb(0, 200, 0)),
-                        ("Beta", "beta", egui::Color32::YELLOW),
-                        ("Alpha", "alpha", egui::Color32::LIGHT_RED),
+                        (tr(lang, "Release"), "release", egui::Color32::from_rgb(0, 200, 0)),
+                        (tr(lang, "Beta"), "beta", egui::Color32::YELLOW),
+                        (tr(lang, "Alpha"), "alpha", egui::Color32::LIGHT_RED),
                     ] {
                         let sel = self
                             .tab(platform)
@@ -550,7 +573,7 @@ impl App {
                 shown = content::filter_versions(shown, &mc_filter, &types);
                 content::sort_versions(&mut shown, self.tab(platform).version_sort);
                 if shown.is_empty() {
-                    ui.weak("No versions match the filters.");
+                    ui.weak(tr(lang, "No versions match the filters."));
                 }
                 for file in shown.iter().take(50) {
                     ui.horizontal(|ui| {
@@ -572,7 +595,7 @@ impl App {
                             ui.monospace(&file.name);
                             ui.horizontal(|ui| {
                                 if !file.author.is_empty() {
-                                    ui.weak(format!("by {}", file.author));
+                                    ui.weak(tr_fmt(lang, "by {0}", &[&file.author]));
                                 }
                                 if let Some(mc) = file.game_versions.first() {
                                     ui.weak(format!("MC {mc}"));
@@ -585,7 +608,7 @@ impl App {
                                 ui.weak(format!("{:.1} MB", file.size as f32 / 1_048_576.0));
                             });
                         });
-                        let label = if installing { "..." } else { "Download" };
+                        let label = if installing { "..." } else { tr(lang, "Download") };
                         if ui
                             .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.add_enabled(!installing, egui::Button::new(label))
@@ -598,7 +621,11 @@ impl App {
                     });
                 }
                 if shown.len() > 50 {
-                    ui.weak(format!("... {} more hidden", shown.len() - 50));
+                    ui.weak(tr_fmt(
+                        lang,
+                        "... {0} more hidden",
+                        &[&(shown.len() - 50).to_string()],
+                    ));
                 }
             }
         }
@@ -616,11 +643,12 @@ impl App {
         item: content::ContentItem,
         file: content::ContentFile,
     ) {
+        let lang = self.settings.language;
         self.content_downloading = true;
         *self
             .content_progress
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = format!("downloading {}…", file.file_name);
+            .unwrap_or_else(|e| e.into_inner()) = tr_fmt(lang, "downloading {0}…", &[&file.file_name]);
         let game_dir = self.active_game_dir();
         // Data packs, shaders, plugins and server jars land in the user's
         // Downloads folder; mods and resource packs go into the game dir.
@@ -634,15 +662,20 @@ impl App {
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
-                let result = content::download_file(&agent, &game_dir, kind, &file);
+                let result = content::download_file(&agent, &game_dir, kind, &file, lang);
                 progress.lock().unwrap_or_else(|e| e.into_inner()).clear();
                 result.map_err(|e| e.to_string())
             },
             move |app, result| {
+                let lang = app.settings.language;
                 app.content_downloading = false;
                 match result {
                     Ok(path) => {
-                        let msg = format!("{} installed to {}", item.title, path.display());
+                        let msg = tr_fmt(
+                            lang,
+                            "{0} installed to {1}",
+                            &[&item.title, &path.display().to_string()],
+                        );
                         app.log_console(format!("[RustLauncher] {msg}"));
                         app.notify_info(msg);
                     }

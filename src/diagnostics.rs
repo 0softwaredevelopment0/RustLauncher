@@ -4,6 +4,8 @@
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 
+use crate::lang::{tr, tr_fmt, Language};
+
 const TEST_URLS: &[&str] = &[
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
     "https://api.mojang.com/users/profiles/minecraft/Test",
@@ -19,7 +21,7 @@ pub struct CheckResult {
 }
 
 /// DNS resolve a host (Minecraft-style, first addresses).
-pub fn dns_check(host: &str) -> CheckResult {
+pub fn dns_check(host: &str, lang: Language) -> CheckResult {
     let name = format!("DNS {host}");
     match (host, 0u16).to_socket_addrs() {
         Ok(addrs) => {
@@ -28,7 +30,7 @@ pub fn dns_check(host: &str) -> CheckResult {
                 CheckResult {
                     name,
                     ok: false,
-                    detail: "no addresses returned".into(),
+                    detail: tr(lang, "no addresses returned").into(),
                 }
             } else {
                 CheckResult {
@@ -47,15 +49,15 @@ pub fn dns_check(host: &str) -> CheckResult {
 }
 
 /// HTTP GET probe.
-pub fn http_check(agent: &ureq::Agent, url: &str) -> CheckResult {
+pub fn http_check(agent: &ureq::Agent, url: &str, lang: Language) -> CheckResult {
     let name = format!("HTTP {url}");
     match agent.get(url).call() {
         Ok(resp) => {
             let status = resp.status();
             let detail = if resp.header("content-length").is_some() {
-                format!("HTTP {status}")
+                tr_fmt(lang, "HTTP {0}", &[&status.to_string()])
             } else {
-                format!("HTTP {status} (streamed)")
+                tr_fmt(lang, "HTTP {0} (streamed)", &[&status.to_string()])
             };
             CheckResult {
                 name,
@@ -66,33 +68,33 @@ pub fn http_check(agent: &ureq::Agent, url: &str) -> CheckResult {
         Err(e) => CheckResult {
             name,
             ok: false,
-            detail: crate::net::classify(e).to_string(),
+            detail: crate::net::classify(e, lang).to_string(),
         },
     }
 }
 
 /// Direct TCP connect probe with a short timeout.
-pub fn tcp_check(address: &str, timeout: Duration) -> CheckResult {
+pub fn tcp_check(address: &str, timeout: Duration, lang: Language) -> CheckResult {
     let name = format!("TCP {address}");
     match address.to_socket_addrs() {
         Err(e) => CheckResult {
             name,
             ok: false,
-            detail: format!("DNS failed: {e}"),
+            detail: tr_fmt(lang, "DNS failed: {0}", &[&e.to_string()]),
         },
         Ok(mut addrs) => {
             let Some(addr) = addrs.next() else {
                 return CheckResult {
                     name,
                     ok: false,
-                    detail: "DNS returned no addresses".into(),
+                    detail: tr(lang, "DNS returned no addresses").into(),
                 };
             };
             match std::net::TcpStream::connect_timeout(&addr, timeout) {
                 Ok(_) => CheckResult {
                     name,
                     ok: true,
-                    detail: format!("connected to {addr}"),
+                    detail: tr_fmt(lang, "connected to {0}", &[&addr.to_string()]),
                 },
                 Err(e) => CheckResult {
                     name,
@@ -105,10 +107,10 @@ pub fn tcp_check(address: &str, timeout: Duration) -> CheckResult {
 }
 
 /// Run the full suite in order.
-pub fn run_all(agent: &ureq::Agent) -> Vec<CheckResult> {
+pub fn run_all(agent: &ureq::Agent, lang: Language) -> Vec<CheckResult> {
     let mut results = Vec::new();
     results.push(CheckResult {
-        name: "Platform".into(),
+        name: tr(lang, "Platform").into(),
         ok: true,
         detail: format!("{} / RustLauncher", std::env::consts::OS),
     });
@@ -117,13 +119,13 @@ pub fn run_all(agent: &ureq::Agent) -> Vec<CheckResult> {
         "api.mojang.com",
         "resources.download.minecraft.net",
     ] {
-        results.push(dns_check(host));
+        results.push(dns_check(host, lang));
     }
     for url in TEST_URLS {
-        results.push(http_check(agent, url));
+        results.push(http_check(agent, url, lang));
     }
     for server in TEST_SERVERS {
-        results.push(tcp_check(server, Duration::from_secs(3)));
+        results.push(tcp_check(server, Duration::from_secs(3), lang));
     }
     results
 }
@@ -134,13 +136,17 @@ mod tests {
 
     #[test]
     fn dns_check_reports_localhost() {
-        let r = dns_check("localhost");
+        let r = dns_check("localhost", crate::lang::Language::English);
         assert!(r.ok, "{}: {}", r.name, r.detail);
     }
 
     #[test]
     fn tcp_check_reports_bad_host_gracefully() {
-        let r = tcp_check("no.such.host.invalid:12345", Duration::from_secs(1));
+        let r = tcp_check(
+            "no.such.host.invalid:12345",
+            Duration::from_secs(1),
+            crate::lang::Language::English,
+        );
         assert!(!r.ok);
         assert!(!r.detail.is_empty());
     }

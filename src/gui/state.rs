@@ -173,14 +173,17 @@ pub enum VersionSort {
 }
 
 impl VersionSort {
-    pub(crate) fn label(self) -> String {
+    pub(crate) fn label(self, lang: crate::lang::Language) -> String {
+        use crate::lang::{tr, tr_fmt};
         match self {
-            VersionSort::Newest => "Newest".to_string(),
-            VersionSort::Number => format!("Number {}", icons::ARROW_DOWNWARD),
-            VersionSort::ReleaseDate => "Release date".to_string(),
-            VersionSort::LoaderType => "Loader type".to_string(),
-            VersionSort::Alphabetical => format!("A {} Z", icons::ARROW_FORWARD),
-            VersionSort::AlphabeticalReverse => format!("Z {} A", icons::ARROW_FORWARD),
+            VersionSort::Newest => tr(lang, "Newest").to_string(),
+            VersionSort::Number => {
+                tr_fmt(lang, "Number {0}", &[icons::ARROW_DOWNWARD])
+            }
+            VersionSort::ReleaseDate => tr(lang, "Release date").to_string(),
+            VersionSort::LoaderType => tr(lang, "Loader type").to_string(),
+            VersionSort::Alphabetical => tr_fmt(lang, "A {0} Z", &[icons::ARROW_FORWARD]),
+            VersionSort::AlphabeticalReverse => tr_fmt(lang, "Z {0} A", &[icons::ARROW_FORWARD]),
         }
     }
 }
@@ -425,9 +428,9 @@ impl IconCache {
 }
 
 /// Download and decode an icon into raw RGBA + dimensions.
-pub(crate) fn fetch_icon_rgba(url: &str) -> Result<(Vec<u8>, u32, u32)> {
-    let bytes = crate::net::get_bytes(&crate::net::agent(), url)?;
-    let img = image::load_from_memory(&bytes).context("failed to decode the icon image")?;
+pub(crate) fn fetch_icon_rgba(url: &str, lang: crate::lang::Language) -> Result<(Vec<u8>, u32, u32)> {
+    let bytes = crate::net::get_bytes(&crate::net::agent(), url, lang)?;
+    let img = image::load_from_memory(&bytes).context(crate::lang::tr(lang, "failed to decode the icon image"))?;
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width(), rgba.height());
     Ok((rgba.into_raw(), w, h))
@@ -508,7 +511,7 @@ pub struct App {
     pub(crate) icon_cache: IconCache,
 
     // Servers.
-    pub server_status: BTreeMap<usize, String>,
+    pub server_status: BTreeMap<usize, crate::servers::ServerStatus>,
     pub new_server_name: String,
     pub new_server_addr: String,
     pub servers_dat_status: String,
@@ -719,15 +722,16 @@ pub enum VersionFilter {
 }
 
 impl VersionFilter {
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self, lang: crate::lang::Language) -> &'static str {
+        use crate::lang::tr;
         match self {
-            VersionFilter::All => "All",
-            VersionFilter::Mojang => "Mojang",
-            VersionFilter::Loaders => "Loaders",
-            VersionFilter::Release => "Releases",
-            VersionFilter::Snapshot => "Snapshots",
-            VersionFilter::Old => "Old",
-            VersionFilter::Installed => "Installed",
+            VersionFilter::All => tr(lang, "All"),
+            VersionFilter::Mojang => tr(lang, "Mojang"),
+            VersionFilter::Loaders => tr(lang, "Loaders"),
+            VersionFilter::Release => tr(lang, "Releases"),
+            VersionFilter::Snapshot => tr(lang, "Snapshots"),
+            VersionFilter::Old => tr(lang, "Old"),
+            VersionFilter::Installed => tr(lang, "Installed"),
         }
     }
 

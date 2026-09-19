@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::home;
+use crate::lang::{tr, tr_fmt, Language};
 use crate::nbt::{self, Value};
 
 pub const DEFAULT_PORT: &str = "25565";
@@ -268,17 +269,23 @@ fn set_in_compound(root: &mut Value, key: &str, value: Value) {
 /// Hostnames are resolved via the system resolver (`ToSocketAddrs`) — a
 /// plain `SocketAddr::parse` only accepts literal IPs and fails on domains
 /// with "the requested address is not valid in its context".
-pub fn check_status(address: &str) -> ServerStatus {
+pub fn check_status(address: &str, lang: Language) -> ServerStatus {
     let (ip, port) = split_address(address);
     let Ok(port_num) = port.parse::<u16>() else {
-        return ServerStatus::Offline("invalid port".into());
+        return ServerStatus::Offline(tr(lang, "invalid port").into());
     };
     let addrs = match (ip.as_str(), port_num).to_socket_addrs() {
         Ok(addrs) => addrs.collect::<Vec<_>>(),
-        Err(e) => return ServerStatus::Offline(format!("cannot resolve {ip}: {e}")),
+        Err(e) => {
+            return ServerStatus::Offline(tr_fmt(
+                lang,
+                "cannot resolve {0}: {1}",
+                &[&ip, &e.to_string()],
+            ))
+        }
     };
     if addrs.is_empty() {
-        return ServerStatus::Offline(format!("cannot resolve {ip}"));
+        return ServerStatus::Offline(tr_fmt(lang, "cannot resolve {0}", &[&ip]));
     }
     let timeout = Duration::from_secs(3);
     // Try every resolved address (a domain often has several A/AAAA records);
@@ -289,10 +296,10 @@ pub fn check_status(address: &str) -> ServerStatus {
             Ok(_) => return ServerStatus::Online,
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
                 // The host is reachable; nothing is listening on that port.
-                return ServerStatus::Offline("connection refused".into());
+                return ServerStatus::Offline(tr(lang, "connection refused").into());
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                return ServerStatus::Offline("timeout".into())
+                return ServerStatus::Offline(tr(lang, "timeout").into())
             }
             Err(e) => last_err = Some(e),
         }
@@ -300,7 +307,7 @@ pub fn check_status(address: &str) -> ServerStatus {
     ServerStatus::Offline(
         last_err
             .map(|e| e.to_string())
-            .unwrap_or_else(|| "unreachable".into()),
+            .unwrap_or_else(|| tr(lang, "unreachable").into()),
     )
 }
 
@@ -308,6 +315,18 @@ pub fn check_status(address: &str) -> ServerStatus {
 pub enum ServerStatus {
     Online,
     Offline(String),
+}
+
+impl ServerStatus {
+    /// Localized status line for the Servers screen.
+    pub fn display(&self, lang: Language) -> String {
+        match self {
+            ServerStatus::Online => tr(lang, "online").to_string(),
+            ServerStatus::Offline(reason) => {
+                tr_fmt(lang, "offline ({0})", &[reason])
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for ServerStatus {
@@ -329,14 +348,15 @@ mod tests {
 
     #[test]
     fn check_status_resolves_domains() {
+        use crate::lang::Language;
         // A real domain with a running web server must resolve and connect
         // (guards the regression where a hostname passed straight to
         // SocketAddr::parse and always failed with "address not valid").
-        let status = check_status("example.com:80");
+        let status = check_status("example.com:80", Language::English);
         assert_eq!(status, ServerStatus::Online);
         // A domain that does not exist must report a resolution failure,
         // not a bogus "connected".
-        let status = check_status("no-such-host-rustlauncher.invalid:25565");
+        let status = check_status("no-such-host-rustlauncher.invalid:25565", Language::English);
         assert!(
             matches!(status, ServerStatus::Offline(ref r) if r.contains("resolve")),
             "unexpected status: {status}"

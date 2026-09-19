@@ -7,32 +7,45 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use image::ImageFormat;
 
+use crate::lang::{tr, tr_fmt, Language};
 use crate::net;
 
 /// Download the skin PNG for `username` into `skins_dir` and return its path.
-pub fn download_skin(agent: &ureq::Agent, skins_dir: &Path, username: &str) -> Result<PathBuf> {
+pub fn download_skin(
+    agent: &ureq::Agent,
+    skins_dir: &Path,
+    username: &str,
+    lang: Language,
+) -> Result<PathBuf> {
     // 1. UUID from the Mojang profile API (404 = unknown player).
     let profile_url = format!("https://api.mojang.com/users/profiles/minecraft/{username}");
-    let profile_body = net::get_string(agent, &profile_url)
-        .map_err(|e| anyhow!("player '{username}' not found ({e})"))?;
+    let profile_body = net::get_string(agent, &profile_url, lang)
+        .map_err(|e| anyhow!("{}", tr_fmt(lang, "player '{0}' not found ({1})", &[username, &e.to_string()])))?;
     let profile: serde_json::Value = serde_json::from_str(&profile_body)
-        .with_context(|| format!("bad profile response for '{username}'"))?;
+        .with_context(|| tr_fmt(lang, "bad profile response for '{0}'", &[username]))?;
     let uuid = profile
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("profile response for '{username}' has no 'id' field"))?;
+        .ok_or_else(|| {
+            anyhow!("{}", tr_fmt(lang, "profile response for '{0}' has no 'id' field", &[username]))
+        })?;
 
     // 2. Skin from Crafatar.
     let skin_url = format!("https://crafatar.com/skins/{uuid}");
-    let bytes = net::get_bytes(agent, &skin_url)?;
+    let bytes = net::get_bytes(agent, &skin_url, lang)?;
 
     // 3. Validate it is a real 64x32/64x64 PNG before saving.
     let img = image::load_from_memory_with_format(&bytes, ImageFormat::Png)
-        .context("downloaded skin is not a valid PNG")?;
+        .context(tr(lang, "downloaded skin is not a valid PNG"))?;
     let (w, h) = (img.width(), img.height());
     if !((w == 64 && h == 32) || (w == 64 && h == 64)) {
         return Err(anyhow!(
-            "unexpected skin size {w}x{h} (expected 64x32 or 64x64)"
+            "{}",
+            tr_fmt(
+                lang,
+                "unexpected skin size {0}x{1} (expected 64x32 or 64x64)",
+                &[&w.to_string(), &h.to_string()]
+            )
         ));
     }
 
@@ -43,18 +56,25 @@ pub fn download_skin(agent: &ureq::Agent, skins_dir: &Path, username: &str) -> R
 }
 
 /// Import a local PNG skin; copies it into `skins_dir`. Returns the skin name.
-pub fn import_skin(skins_dir: &Path, source: &Path) -> Result<String> {
-    let bytes =
-        std::fs::read(source).with_context(|| format!("cannot read {}", source.display()))?;
+pub fn import_skin(skins_dir: &Path, source: &Path, lang: Language) -> Result<String> {
+    let bytes = std::fs::read(source)
+        .with_context(|| tr_fmt(lang, "cannot read {0}", &[&source.display().to_string()]))?;
     let img = image::load_from_memory_with_format(&bytes, ImageFormat::Png)
-        .context("not a valid PNG skin")?;
+        .context(tr(lang, "not a valid PNG skin"))?;
     let (w, h) = (img.width(), img.height());
     if !((w == 64 && h == 32) || (w == 64 && h == 64)) {
-        return Err(anyhow!("skin must be 64x32 or 64x64, got {w}x{h}"));
+        return Err(anyhow!(
+            "{}",
+            tr_fmt(
+                lang,
+                "skin must be 64x32 or 64x64, got {0}x{1}",
+                &[&w.to_string(), &h.to_string()]
+            )
+        ));
     }
     std::fs::create_dir_all(skins_dir)?;
     let Some(name) = source.file_stem().and_then(|n| n.to_str()) else {
-        return Err(anyhow!("skin file has no usable name"));
+        return Err(anyhow!("{}", tr(lang, "skin file has no usable name")));
     };
     std::fs::copy(source, skins_dir.join(format!("{name}.png")))?;
     Ok(name.to_string())
@@ -147,9 +167,10 @@ mod tests {
 
     /// Same retry idea for the import call itself.
     fn retry_import(skins_dir: &Path, source: &Path) -> String {
+        use crate::lang::Language;
         let mut last = None;
         for _ in 0..10 {
-            match import_skin(skins_dir, source) {
+            match import_skin(skins_dir, source, Language::English) {
                 Ok(name) => return name,
                 Err(e) => {
                     last = Some(e);
@@ -162,12 +183,13 @@ mod tests {
 
     #[test]
     fn import_rejects_wrong_size() {
+        use crate::lang::Language;
         let dir = std::env::temp_dir().join(format!("rl-skin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let bad = dir.join("bad.png");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&bad, make_png(32, 32)).unwrap();
-        let err = import_skin(&dir, &bad).unwrap_err();
+        let err = import_skin(&dir, &bad, Language::English).unwrap_err();
         assert!(err.to_string().contains("64x32 or 64x64"));
         let _ = std::fs::remove_dir_all(&dir);
     }
