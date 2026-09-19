@@ -188,7 +188,9 @@ impl App {
                         }
                     });
             }
-            // How much of the game output to display.
+            // How much of the game output to display in the console
+            // (display filter only — log files are configured in Settings).
+            ui.label("Show in console:");
             egui::ComboBox::from_id_salt("console_mode")
                 .selected_text(self.settings.console_log_mode.label())
                 .width(150.0)

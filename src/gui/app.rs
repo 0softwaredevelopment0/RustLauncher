@@ -254,27 +254,14 @@ impl App {
 
             ui.strong("Logs");
             ui.horizontal(|ui| {
-                ui.label("Launcher log file:");
-                egui::ComboBox::from_id_salt("launcher_file_log")
-                    .selected_text(self.settings.launcher_file_log.label())
+                ui.label("Log to file:");
+                egui::ComboBox::from_id_salt("file_log")
+                    .selected_text(self.settings.file_log.label())
                     .width(170.0)
                     .show_ui(ui, |ui| {
                         for mode in settings::FileLogMode::ALL {
                             ui.selectable_value(
-                                &mut self.settings.launcher_file_log,
-                                mode,
-                                mode.label(),
-                            );
-                        }
-                    });
-                ui.label("Game log file:");
-                egui::ComboBox::from_id_salt("game_file_log")
-                    .selected_text(self.settings.game_file_log.label())
-                    .width(170.0)
-                    .show_ui(ui, |ui| {
-                        for mode in settings::FileLogMode::ALL {
-                            ui.selectable_value(
-                                &mut self.settings.game_file_log,
+                                &mut self.settings.file_log,
                                 mode,
                                 mode.label(),
                             );
@@ -283,7 +270,8 @@ impl App {
             });
             ui.label(
                 egui::RichText::new(
-                    "What the logs/ files capture. The Console tab display filter lives on the Console tab.",
+                    "What the logs/ files (launcher + game) capture. \
+                     What the Console tab shows is picked on the Console tab.",
                 )
                 .small()
                 .color(egui::Color32::GRAY),

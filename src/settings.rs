@@ -11,12 +11,15 @@ use serde::{Deserialize, Serialize};
 use crate::home;
 use crate::jvm;
 
-/// How much of the game output the Console tab displays.
+/// How much of the game output the Console tab displays (display filter
+/// only — it does not affect what is written to the log files).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ConsoleMode {
     /// Every line.
     #[default]
     All,
+    /// Only warnings.
+    Warnings,
     /// Only errors (errors, exceptions, crashes).
     Errors,
     /// Errors plus warnings.
@@ -26,8 +29,9 @@ pub enum ConsoleMode {
 }
 
 impl ConsoleMode {
-    pub const ALL: [ConsoleMode; 4] = [
+    pub const ALL: [ConsoleMode; 5] = [
         ConsoleMode::All,
+        ConsoleMode::Warnings,
         ConsoleMode::Errors,
         ConsoleMode::ErrorsAndWarnings,
         ConsoleMode::Nothing,
@@ -36,6 +40,7 @@ impl ConsoleMode {
     pub fn label(self) -> &'static str {
         match self {
             ConsoleMode::All => "All",
+            ConsoleMode::Warnings => "Warnings",
             ConsoleMode::Errors => "Errors",
             ConsoleMode::ErrorsAndWarnings => "Errors + warnings",
             ConsoleMode::Nothing => "Nothing",
@@ -56,6 +61,7 @@ impl ConsoleMode {
         match self {
             ConsoleMode::All => true,
             ConsoleMode::Nothing => false,
+            ConsoleMode::Warnings => line_matches(line, WARNING_MARKERS),
             ConsoleMode::Errors => line_matches(line, ERROR_MARKERS),
             ConsoleMode::ErrorsAndWarnings => {
                 line_matches(line, ERROR_MARKERS) || line_matches(line, WARNING_MARKERS)
@@ -159,11 +165,10 @@ pub struct Settings {
     pub connect_server_ip: String,
     pub auto_connect: bool,
     /// Write the game console output to a numbered log file.
-    /// What the `logs/launcher-N.log` file captures.
-    pub launcher_file_log: FileLogMode,
-    /// What the `logs/game-N.log` file captures (replaces the old
-    /// boolean `save_console_log`).
-    pub game_file_log: FileLogMode,
+    /// What BOTH `logs/` files capture (`launcher-N.log` and `game-N.log`).
+    /// Replaces the old per-file `launcher_file_log` / `game_file_log`
+    /// pair (old config keys are ignored on load).
+    pub file_log: FileLogMode,
     /// How much of the game output the Console tab shows.
     pub console_log_mode: ConsoleMode,
     pub dark_theme: bool,
@@ -189,8 +194,7 @@ impl Default for Settings {
             selected_version: String::new(),
             connect_server_ip: String::new(),
             auto_connect: false,
-            launcher_file_log: FileLogMode::All,
-            game_file_log: FileLogMode::All,
+            file_log: FileLogMode::All,
             console_log_mode: ConsoleMode::All,
             dark_theme: true,
             confirm_kill: true,
@@ -294,12 +298,14 @@ mod tests {
         // still load.
         std::fs::write(
             dir.join("config.json"),
-            br#"{"ram": 2048, "all_logs": true, "someRemovedSetting": true}"#,
+            br#"{"ram": 2048, "all_logs": true, "someRemovedSetting": true, "launcher_file_log": "Errors", "game_file_log": "Warnings"}"#,
         )
         .unwrap();
         let s = Settings::load(&dir);
         assert_eq!(s.java_args, jvm::DEFAULT_JVM_ARGS);
         assert_eq!(s.console_log_mode, ConsoleMode::All);
+        // The per-file modes were merged into a single `file_log`.
+        assert_eq!(s.file_log, FileLogMode::All);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -310,6 +316,9 @@ mod tests {
         let plain = "Rendering world chunk 42";
         assert!(ConsoleMode::All.allows(err));
         assert!(ConsoleMode::All.allows(plain));
+        assert!(ConsoleMode::Warnings.allows(warn));
+        assert!(!ConsoleMode::Warnings.allows(err));
+        assert!(!ConsoleMode::Warnings.allows(plain));
         assert!(ConsoleMode::Errors.allows(err));
         assert!(!ConsoleMode::Errors.allows(warn));
         assert!(!ConsoleMode::Errors.allows(plain));

@@ -406,7 +406,7 @@ impl App {
         self.console = console.clone();
         self.console_seq = 0;
 
-        let game_file_log = settings.game_file_log;
+        let file_log = settings.file_log;
         let home_dir = self.home_dir.clone();
 
         running.store(true, Ordering::SeqCst);
@@ -422,7 +422,7 @@ impl App {
                     &account,
                     &settings,
                     console,
-                    game_file_log,
+                    file_log,
                     &home_dir,
                     log,
                     pid,
@@ -471,9 +471,9 @@ impl App {
     // ── launcher error log & toasts ──────────────────────
 
     /// Open `logs/launcher-N.log` for the whole app lifetime; the file
-    /// captures what `launcher_file_log` allows (Nothing = no file at all).
+    /// captures what `file_log` allows (Nothing = no file at all).
     pub(crate) fn start_launcher_log(&mut self) {
-        if self.settings.launcher_file_log == settings::FileLogMode::Nothing {
+        if self.settings.file_log == settings::FileLogMode::Nothing {
             return;
         }
         match SessionLog::start(&home::logs_dir(&self.home_dir), "launcher") {
@@ -516,9 +516,9 @@ impl App {
     }
 
     /// Write a launcher-side line to the launcher log file, honoring the
-    /// `launcher_file_log` mode.
+    /// `file_log` mode.
     pub(crate) fn log_launcher_line(&self, line: &str) {
-        if !self.settings.launcher_file_log.allows(line) {
+        if !self.settings.file_log.allows(line) {
             return;
         }
         if let Some(log) = &self.launcher_log {
