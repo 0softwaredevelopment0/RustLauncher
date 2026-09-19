@@ -709,6 +709,7 @@ impl App {
         let kill_confirmed = kind == TerminateKind::Kill;
         egui::Window::new(egui::RichText::new("Confirm").strong())
             .id(egui::Id::new("terminate_confirm_dialog"))
+            .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)

@@ -305,7 +305,7 @@ impl App {
         });
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("Save settings").clicked() {
+            if ui.button(format!("{} Save settings", icons::CHECK)).clicked() {
                 self.save_settings();
                 self.reload_versions();
                 self.play_status = "Settings saved".into();
@@ -481,6 +481,7 @@ impl App {
 
         egui::Window::new(egui::RichText::new("Confirm").strong())
             .id(egui::Id::new("settings_reset_dialog"))
+            .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)
