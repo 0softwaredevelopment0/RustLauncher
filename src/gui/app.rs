@@ -20,7 +20,7 @@ impl App {
             };
             if let Some(item) = item {
                 ui.horizontal(|ui| {
-                    if ui.button("← Back").clicked() {
+                    if ui.button(format!("{} Back", icons::ARROW_BACK)).clicked() {
                         self.news_selected = None;
                     }
                 });
