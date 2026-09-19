@@ -14,6 +14,7 @@ mod cli;
 mod content;
 mod db;
 mod diagnostics;
+mod fonts;
 mod gui;
 mod home;
 mod icons;

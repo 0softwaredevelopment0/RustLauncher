@@ -11,8 +11,8 @@ use anyhow::{Context as _, Result};
 
 use crate::accounts::AccountStore;
 use crate::auth::{self, AccountKind};
+use crate::fonts;
 use crate::home;
-use crate::icons;
 use crate::instances;
 use crate::lang::{tr, tr_fmt};
 use crate::launcher;
@@ -37,7 +37,7 @@ use super::toast_ui::{draw_warning_triangle, tail_lines, toast_body};
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = cc.egui_ctx.clone();
-        icons::install(&ctx);
+        fonts::install(&ctx);
         let home_dir = home::launcher_home().unwrap_or_else(|_| std::env::temp_dir());
         let _ = home::ensure(&home_dir);
         let settings = Settings::load(&home_dir);

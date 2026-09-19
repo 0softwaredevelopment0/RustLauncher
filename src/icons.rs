@@ -1,17 +1,14 @@
 //! Material Icons (Google's official icon font, Apache 2.0) embedded into the
-//! binary and registered as an egui fallback font, so UI text can use real
-//! vector icons instead of unicode placeholders that render as empty boxes.
+//! binary and registered as an egui fallback font (see [`crate::fonts`]), so
+//! UI text can use real vector icons instead of unicode placeholders that
+//! render as empty boxes.
 //!
 //! Usage in UI code: `ui.button(format!("{} Back", icons::ARROW_BACK))` — the
 //! glyph is looked up in the appended `material-icons` font when the default
 //! fonts (which lack these codepoints) fall through.
 
-use std::sync::OnceLock;
-
-use egui::FontData;
-
 /// The embedded Material Icons font bytes.
-static FONT_BYTES: &[u8] = include_bytes!("../assets/MaterialIcons-Regular.ttf");
+pub(crate) static FONT_BYTES: &[u8] = include_bytes!("../assets/MaterialIcons-Regular.ttf");
 
 // Icon codepoints from the Material Icons `codepoints` file. Each constant is
 // a string holding the single glyph, ready for `format!()`-ing into labels
@@ -71,30 +68,6 @@ pub const ALL_ICONS: &[&str] = &[
     CHECK,
     RESTORE,
 ];
-
-/// Install the icon font into the egui context (idempotent). Call once at
-/// startup, before the first frame is drawn.
-pub fn install(ctx: &egui::Context) {
-    INSTALL.get_or_init(|| {
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            "material-icons".to_owned(),
-            FontData::from_static(FONT_BYTES),
-        );
-        // Append to Proportional so any glyph missing from the default fonts
-        // (i.e. every icon codepoint) falls through to the icon font. The
-        // atlas only rasterizes glyphs actually drawn, so embedding the full
-        // font costs ~350 KiB of binary size and nothing at runtime.
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .push("material-icons".to_owned());
-        ctx.set_fonts(fonts);
-    });
-}
-
-static INSTALL: OnceLock<()> = OnceLock::new();
 
 #[cfg(test)]
 mod tests {
