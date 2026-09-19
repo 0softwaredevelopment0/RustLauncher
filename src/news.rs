@@ -93,12 +93,6 @@ pub fn fallback_news() -> Vec<NewsItem> {
              from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!",
             "01.01.2025",
         ),
-        NewsItem::new(
-            "Migrated from PowerLaunch",
-            "All launch features of the Java launcher are here: server list \
-             sync, skins, diagnostics and numbered session logs.",
-            "01.01.2025",
-        ),
     ]
 }
 

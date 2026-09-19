@@ -78,7 +78,7 @@ impl App {
             .inner_margin(egui::Margin::symmetric(14.0, 12.0))
             .stroke(egui::Stroke::new(1.0_f32, border_color));
 
-        let response = frame
+        let resp = frame
             .show(ui, |ui| {
                 // Top row: author + date.
                 ui.horizontal(|ui| {
@@ -112,15 +112,18 @@ impl App {
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new("Read more →")
+                    egui::RichText::new(format!("{}  Read more", icons::ARROW_BACK))
                         .small()
                         .color(egui::Color32::from_rgb(0, 200, 255)),
                 );
             })
             .response;
 
-        if idx.is_some() && response.interact(egui::Sense::click()).clicked() {
-            self.news_selected = idx;
+        if idx.is_some() {
+            let clicked = ui.interact(resp.rect, egui::Id::new(("news_card", idx)), egui::Sense::click()).clicked();
+            if clicked {
+                self.news_selected = idx;
+            }
         }
         ui.add_space(8.0);
     }
