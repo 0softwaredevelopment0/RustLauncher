@@ -60,18 +60,6 @@ impl App {
         let mut custom_java = self.settings.use_custom_java;
         egui::ScrollArea::vertical().show(ui, |ui| {
 
-            ui.strong("Directories");
-            ui.horizontal(|ui| {
-                ui.label("Game dir");
-                ui.text_edit_singleline(&mut self.settings.game_directory);
-                if ui.button("…").clicked() {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        self.settings.game_directory = dir.to_string_lossy().to_string();
-                    }
-                }
-            });
-            ui.add_space(4.0);
-
             // Java: Default vs Custom, switched with checkboxes.
             ui.strong("Java");
             ui.horizontal(|ui| {
