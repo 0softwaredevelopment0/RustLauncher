@@ -134,6 +134,14 @@ impl App {
                 &mut self.settings.use_custom_resolution,
                 "Custom resolution",
             );
+            ui.add_enabled_ui(self.settings.use_custom_resolution, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Width");
+                    ui.add(egui::DragValue::new(&mut self.settings.game_width).range(320..=7680));
+                    ui.label("Height");
+                    ui.add(egui::DragValue::new(&mut self.settings.game_height).range(240..=4320));
+                });
+            });
 
             ui.strong("Launcher");
             ui.checkbox(
