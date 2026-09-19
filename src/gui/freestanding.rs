@@ -111,6 +111,7 @@ impl App {
             skin_texture: None,
             skin_status: String::new(),
             news: None,
+            news_selected: None,
             diag_results: None,
             diag_running: false,
             jobs: Arc::new(Mutex::new(Vec::new())),
@@ -231,12 +232,12 @@ impl App {
     }
 
     pub(crate) fn fetch_news(&mut self) {
-        let url =
-            "https://raw.githubusercontent.com/rizer001-Development/launcher-news/main/news.json";
+        let base = self.settings.news_url.trim().to_string();
+        let url = format!("{}/api/news", base.trim_end_matches('/'));
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
-                news::fetch(&agent, url)
+                news::fetch(&agent, &url)
             },
             |app, result| {
                 app.news = Some(result.map_err(|e| e.to_string()));

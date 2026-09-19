@@ -543,6 +543,8 @@ pub struct App {
 
     // News.
     pub news: Option<Result<Vec<NewsItem>, String>>,
+    /// Index of the expanded news detail view; `None` = card grid.
+    pub news_selected: Option<usize>,
 
     // Diagnostics.
     pub diag_results: Option<Vec<diagnostics::CheckResult>>,

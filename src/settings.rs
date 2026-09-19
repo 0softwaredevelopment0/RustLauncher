@@ -112,6 +112,8 @@ pub struct Settings {
     pub confirm_kill: bool,
     /// Ask for confirmation before politely stopping the game (Stop button).
     pub confirm_stop: bool,
+    /// Base URL for the news feed (API endpoint is `<url>/api/news`).
+    pub news_url: String,
 }
 
 impl Default for Settings {
@@ -133,6 +135,7 @@ impl Default for Settings {
             dark_theme: true,
             confirm_kill: true,
             confirm_stop: true,
+            news_url: "https://rizer001.opik.net/news".to_string(),
         }
     }
 }
