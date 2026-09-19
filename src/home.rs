@@ -1,5 +1,5 @@
 //! The launcher home — the single place where settings, accounts, servers,
-//! profiles, skins and logs live.
+//! skins and logs live.
 //!
 //! Resolution order (port of the Java `LauncherHomeProvider`):
 //! 1. `RUSTLAUNCHER_HOME` environment variable (portable distribution).
@@ -29,10 +29,6 @@ pub fn ensure(home: &Path) -> Result<()> {
 
 pub fn skins_dir(home: &Path) -> PathBuf {
     home.join("skins")
-}
-
-pub fn profiles_dir(home: &Path) -> PathBuf {
-    home.join("profiles")
 }
 
 pub fn logs_dir(home: &Path) -> PathBuf {

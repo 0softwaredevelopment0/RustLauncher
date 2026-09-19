@@ -4,10 +4,8 @@
 use std::sync::atomic::Ordering;
 
 use crate::diagnostics;
-use crate::home;
 use crate::icons;
 use crate::news::{self, NewsItem};
-use crate::profiles;
 use crate::settings;
 
 use super::state::{App, ContentPlatform, Screen};
@@ -61,72 +59,6 @@ impl App {
         let mut default_java = !self.settings.use_custom_java;
         let mut custom_java = self.settings.use_custom_java;
         egui::ScrollArea::vertical().show(ui, |ui| {
-            // Profiles.
-            ui.strong("Profile");
-            ui.horizontal(|ui| {
-                let current = self.profile_index.current.clone().unwrap_or_default();
-                egui::ComboBox::from_id_salt("profile_combo")
-                    .selected_text(&current)
-                    .show_ui(ui, |ui| {
-                        for name in self.profile_index.profiles.clone() {
-                            if ui.selectable_label(name == current, &name).clicked() {
-                                if let Err(e) = profiles::switch_profile(
-                                    &home::profiles_dir(&self.home_dir),
-                                    &mut self.profile_index,
-                                    &name,
-                                    &self.settings,
-                                ) {
-                                    self.profile_error = Some(e.to_string());
-                                } else {
-                                    self.settings = profiles::load_profile(
-                                        &home::profiles_dir(&self.home_dir),
-                                        &name,
-                                    );
-                                    self.save_settings();
-                                }
-                            }
-                        }
-                    });
-                if ui.button("New…").clicked() {
-                    let mut name = format!("Profile {}", self.profile_index.profiles.len() + 1);
-                    // Auto-name; renaming can come later via the file system.
-                    while self.profile_index.profiles.contains(&name) {
-                        name.push('·');
-                    }
-                    match profiles::create_profile(
-                        &home::profiles_dir(&self.home_dir),
-                        &mut self.profile_index,
-                        &name,
-                    ) {
-                        Ok(created) => {
-                            self.settings = profiles::load_profile(
-                                &home::profiles_dir(&self.home_dir),
-                                &created,
-                            );
-                            self.save_settings();
-                        }
-                        Err(e) => self.profile_error = Some(e.to_string()),
-                    }
-                }
-                if ui.button("Delete").clicked() {
-                    let dir = home::profiles_dir(&self.home_dir);
-                    if let Err(e) =
-                        profiles::delete_profile(&dir, &mut self.profile_index, &current)
-                    {
-                        self.profile_error = Some(e.to_string());
-                    } else {
-                        self.settings = profiles::load_profile(
-                            &dir,
-                            &self.profile_index.current.clone().unwrap_or_default(),
-                        );
-                        self.save_settings();
-                    }
-                }
-            });
-            if let Some(error) = &self.profile_error {
-                ui.colored_label(egui::Color32::LIGHT_RED, error);
-            }
-            ui.separator();
 
             ui.strong("Directories");
             ui.horizontal(|ui| {

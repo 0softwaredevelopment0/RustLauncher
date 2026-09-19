@@ -26,7 +26,6 @@ mod nbt;
 mod net;
 mod news;
 mod notifications;
-mod profiles;
 mod servers;
 mod settings;
 mod skins;

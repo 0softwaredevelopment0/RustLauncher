@@ -19,7 +19,6 @@ use crate::launcher::LaunchPlan;
 use crate::logs::SessionLog;
 use crate::news;
 use crate::notifications::{Toast, ToastKind, Toasts};
-use crate::profiles;
 use crate::servers::ServerStore;
 use crate::settings::Settings;
 use crate::skins;
@@ -45,7 +44,6 @@ impl App {
         let game_dir = resolve_game_dir(&settings);
         let servers = ServerStore::load_or_import(&home_dir, &game_dir);
         let versions = version::list_versions(&game_dir).unwrap_or_default();
-        let profile_index = profiles::ProfileIndex::load_or_create(&home::profiles_dir(&home_dir));
         let instance_store = instances::InstanceStore::load(&home_dir);
 
         let mut app = App {
@@ -115,8 +113,6 @@ impl App {
             news: None,
             diag_results: None,
             diag_running: false,
-            profile_index,
-            profile_error: None,
             jobs: Arc::new(Mutex::new(Vec::new())),
             ctx,
             toasts: Toasts::default(),

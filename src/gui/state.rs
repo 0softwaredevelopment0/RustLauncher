@@ -16,7 +16,6 @@ use crate::instances;
 use crate::logs::SessionLog;
 use crate::news::NewsItem;
 use crate::notifications::Toasts;
-use crate::profiles;
 use crate::servers::ServerStore;
 use crate::settings::Settings;
 use crate::updater::{self, Manifest};
@@ -548,10 +547,6 @@ pub struct App {
     // Diagnostics.
     pub diag_results: Option<Vec<diagnostics::CheckResult>>,
     pub diag_running: bool,
-
-    // Profiles.
-    pub profile_index: profiles::ProfileIndex,
-    pub profile_error: Option<String>,
 
     // Background completions.
     pub(crate) jobs: Arc<Mutex<Vec<Job>>>,
