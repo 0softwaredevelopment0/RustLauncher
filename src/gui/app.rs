@@ -270,11 +270,9 @@ impl App {
                     egui::TextEdit::singleline(&mut self.settings.news_url).desired_width(360.0),
                 );
                 ui.label(
-                    egui::RichText::new(
-                        "Base URL of the site; the feed is fetched from <URL>/api/news",
-                    )
-                    .small()
-                    .color(egui::Color32::GRAY),
+                    egui::RichText::new("Website base URL used for the news feed")
+                        .small()
+                        .color(egui::Color32::GRAY),
                 );
             });
         });
