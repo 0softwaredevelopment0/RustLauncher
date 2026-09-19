@@ -34,6 +34,7 @@ pub const STOP: &str = "\u{e047}"; // stop
 pub const KILL: &str = "\u{e14c}"; // cancel
 pub const FOLDER: &str = "\u{e2c8}"; // folder
 pub const CHECK_CIRCLE: &str = "\u{e86c}"; // check_circle
+pub const CHEVRON_RIGHT: &str = "\u{e5cc}"; // chevron_right
 
 /// All icon constants, used by tests.
 #[cfg(test)]
@@ -56,6 +57,7 @@ pub const ALL_ICONS: &[&str] = &[
     KILL,
     FOLDER,
     CHECK_CIRCLE,
+    CHEVRON_RIGHT,
 ];
 
 /// Install the icon font into the egui context (idempotent). Call once at

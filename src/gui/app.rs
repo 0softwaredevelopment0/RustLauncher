@@ -54,15 +54,22 @@ impl App {
             Some(Ok(items)) => {
                 let items = items.clone();
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let card_width = (ui.available_width() / 2.0 - 8.0).max(200.0);
-                        for (idx, item) in items.iter().enumerate() {
-                            ui.vertical(|ui| {
-                                ui.set_min_width(card_width);
+                    egui::Grid::new("news_grid")
+                        .num_columns(2)
+                        .min_col_width((ui.available_width() / 2.0).max(220.0))
+                        .spacing([12.0, 12.0])
+                        .show(ui, |ui| {
+                            for (idx, item) in items.iter().enumerate() {
                                 self.news_card(ui, item, Some(idx));
-                            });
-                        }
-                    });
+                                if idx % 2 == 1 {
+                                    ui.end_row();
+                                }
+                            }
+                            if items.len() % 2 == 1 {
+                                ui.label("");
+                                ui.end_row();
+                            }
+                        });
                 });
             }
         }
@@ -92,19 +99,10 @@ impl App {
                 });
                 ui.add_space(6.0);
                 // Title.
-                ui.label(
-                    egui::RichText::new(&item.title)
-                        .strong()
-                        .size(15.0),
-                );
+                ui.label(egui::RichText::new(&item.title).strong().size(15.0));
                 ui.add_space(4.0);
                 // Content preview (max 3 lines).
-                let preview: String = item
-                    .content
-                    .lines()
-                    .take(3)
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let preview: String = item.content.lines().take(3).collect::<Vec<_>>().join("\n");
                 ui.label(
                     egui::RichText::new(preview)
                         .small()
@@ -112,18 +110,28 @@ impl App {
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(format!("{}  Read more", icons::ARROW_BACK))
+                    egui::RichText::new(format!("{}  Read more", icons::CHEVRON_RIGHT))
                         .small()
+                        .strong()
                         .color(egui::Color32::from_rgb(0, 200, 255)),
                 );
             })
             .response;
 
-        if idx.is_some() {
-            let clicked = ui.interact(resp.rect, egui::Id::new(("news_card", idx)), egui::Sense::click()).clicked();
-            if clicked {
-                self.news_selected = idx;
-            }
+        // Whole card is clickable — covers the title, preview and the
+        // "Read more" label. This also makes fallback cards (news feed
+        // unreachable) clickable, which previously did nothing.
+        let idx_slot = idx.map(|i| i as u64).unwrap_or(u64::MAX);
+        let card = ui.interact(
+            resp.rect,
+            egui::Id::new(("news_card", idx_slot)),
+            egui::Sense::click(),
+        );
+        if card.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if card.clicked() && idx.is_some() {
+            self.news_selected = idx;
         }
         ui.add_space(8.0);
     }
@@ -134,10 +142,7 @@ impl App {
             let name = item.author_name();
             ui.label(egui::RichText::new(name).strong().size(14.0));
             ui.separator();
-            ui.label(
-                egui::RichText::new(item.formatted_date())
-                    .color(egui::Color32::GRAY),
-            );
+            ui.label(egui::RichText::new(item.formatted_date()).color(egui::Color32::GRAY));
         });
         ui.add_space(8.0);
         // Title.
@@ -161,7 +166,6 @@ impl App {
         let mut default_java = !self.settings.use_custom_java;
         let mut custom_java = self.settings.use_custom_java;
         egui::ScrollArea::vertical().show(ui, |ui| {
-
             // Java: Default vs Custom, switched with checkboxes.
             ui.strong("Java");
             ui.horizontal(|ui| {
@@ -258,10 +262,16 @@ impl App {
 
             ui.strong("News");
             ui.horizontal(|ui| {
-                ui.label("News URL");
+                ui.label("News site URL");
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.settings.news_url)
-                        .desired_width(360.0),
+                    egui::TextEdit::singleline(&mut self.settings.news_url).desired_width(360.0),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Base URL of the site; the feed is fetched from <URL>/api/news",
+                    )
+                    .small()
+                    .color(egui::Color32::GRAY),
                 );
             });
         });

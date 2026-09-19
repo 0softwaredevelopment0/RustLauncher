@@ -112,7 +112,7 @@ pub struct Settings {
     pub confirm_kill: bool,
     /// Ask for confirmation before politely stopping the game (Stop button).
     pub confirm_stop: bool,
-    /// Base URL for the news feed (API endpoint is `<url>/api/news`).
+    /// Base URL of the website (news API is `<base>/api/news`).
     pub news_url: String,
 }
 
@@ -135,7 +135,7 @@ impl Default for Settings {
             dark_theme: true,
             confirm_kill: true,
             confirm_stop: true,
-            news_url: "https://rizer001.opik.net/news".to_string(),
+            news_url: "https://rizer001.opik.net".to_string(),
         }
     }
 }
@@ -144,10 +144,19 @@ impl Settings {
     /// Load settings; missing or corrupt file falls back to defaults
     /// (the old launcher silently carried on too, but at least we say why).
     pub fn load(home_dir: &Path) -> Settings {
+        const OLD_BROKEN_NEWS_URL: &str = "https://rizer001.opik.net/news";
         let path = home::config_file(home_dir);
         match std::fs::read(&path) {
-            Ok(bytes) => match serde_json::from_slice(&bytes) {
-                Ok(settings) => settings,
+            Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
+                Ok(mut settings) => {
+                    // Older builds shipped a wrong default (`…/news`), which
+                    // made the news feed request `…/news/api/news` → HTTP 404.
+                    // Migrate silently to the site root.
+                    if settings.news_url.trim_end_matches('/') == OLD_BROKEN_NEWS_URL {
+                        settings.news_url = Settings::default().news_url;
+                    }
+                    settings
+                }
                 Err(e) => {
                     eprintln!(
                         "[RustLauncher] corrupt {} ({e}); using defaults",

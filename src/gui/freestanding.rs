@@ -232,8 +232,18 @@ impl App {
     }
 
     pub(crate) fn fetch_news(&mut self) {
-        let base = self.settings.news_url.trim().to_string();
-        let url = format!("{}/api/news", base.trim_end_matches('/'));
+        let mut base = self
+            .settings
+            .news_url
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
+        // The setting is the site base URL, but tolerate users who pasted the
+        // news page address (`…/news`) — the API lives at the site root.
+        if base.ends_with("/news") {
+            base.truncate(base.len() - "/news".len());
+        }
+        let url = format!("{base}/api/news");
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
