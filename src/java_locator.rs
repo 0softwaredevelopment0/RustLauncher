@@ -272,18 +272,35 @@ pub fn vendor_from_path(home: &Path) -> String {
     "Java".to_string()
 }
 
+/// Normalize a path for dedup: absolute, case-insensitive, `/` and `\\`
+/// unified. Different sources spell the same install differently
+/// (`C:/Program Files/...` vs `C:\\Program Files\\...`).
+fn canonical_key(path: &Path) -> Option<String> {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_lowercase()
+        .replace('/', "\\")
+        .into()
+}
+
 fn push_candidate(java_exe: PathBuf, out: &mut Vec<InstalledJava>) {
+    // Store a consistent native-looking path (roots are scanned with `/`,
+    // PATH entries arrive with `\\`).
+    let java_exe = PathBuf::from(java_exe.to_string_lossy().replace('/', "\\"));
     let home = java_exe
         .parent()
         .and_then(|bin| bin.parent())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| java_exe.clone());
-    let key = home.display().to_string().to_ascii_lowercase();
-    if out
-        .iter()
-        .any(|j| j.home.display().to_string().to_ascii_lowercase() == key)
-    {
-        return;
+    let key = canonical_key(&home);
+    if let Some(key) = key {
+        if out
+            .iter()
+            .any(|j| canonical_key(&j.home).is_some_and(|k| k == key))
+        {
+            return;
+        }
     }
     let Some((major, version)) = probe(&java_exe) else {
         return;
@@ -358,7 +375,33 @@ pub fn detect_installed_javas(runtimes_dir: Option<&Path>) -> Vec<InstalledJava>
         }
     }
 
+    // Drop nested runtimes: a `<jdk>/jre` inside an already-found `<jdk>`
+    // (in either scan order) is the same installation — keep the outer home.
+    let keys: Vec<Option<String>> = out.iter().map(|j| canonical_key(&j.home)).collect();
+    let mut keep: Vec<bool> = keys.iter().map(|_| true).collect();
+    for (i, ki) in keys.iter().enumerate() {
+        let Some(ki) = ki else { continue };
+        for (j, kj) in keys.iter().enumerate() {
+            if i == j || !keep[j] {
+                continue;
+            }
+            let Some(kj) = kj else { continue };
+            if kj.starts_with(ki.as_str())
+                && kj.len() > ki.len()
+                && kj[ki.len()..].starts_with('\\')
+            {
+                keep[j] = false; // j is nested inside i
+            }
+        }
+    }
+    let out: Vec<InstalledJava> = out
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(j, k)| k.then_some(j))
+        .collect();
+
     // Newest first; ties fall back to path for a stable order.
+    let mut out = out;
     out.sort_by(|a, b| b.major.cmp(&a.major).then(a.path.cmp(&b.path)));
     out
 }
@@ -366,6 +409,20 @@ pub fn detect_installed_javas(runtimes_dir: Option<&Path>) -> Vec<InstalledJava>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore] // machine-specific: run with `cargo test -- --ignored --nocapture` locally
+    fn detect_prints_installed_javas() {
+        for j in detect_installed_javas(None) {
+            println!(
+                "{:>2} {:<10} {} -> {}",
+                j.major,
+                j.vendor,
+                j.version,
+                j.path.display()
+            );
+        }
+    }
 
     #[test]
     fn parses_modern_java_version_output() {
