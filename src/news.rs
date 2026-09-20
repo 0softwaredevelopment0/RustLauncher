@@ -106,8 +106,12 @@ pub fn fallback_news(lang: Language) -> Vec<NewsItem> {
 /// Fetch the news feed. Returns parsed items or an error the caller can show.
 pub fn fetch(agent: &ureq::Agent, url: &str, lang: Language) -> Result<Vec<NewsItem>> {
     let body = net::get_string(agent, url, lang)?;
-    let items: Vec<NewsItem> = serde_json::from_str(&body)
-        .map_err(|e| anyhow::anyhow!("{}", tr_fmt(lang, "bad news format: {0}", &[&e.to_string()])))?;
+    let items: Vec<NewsItem> = serde_json::from_str(&body).map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            tr_fmt(lang, "bad news format: {0}", &[&e.to_string()])
+        )
+    })?;
     if items.is_empty() {
         return Err(anyhow::anyhow!("{}", tr(lang, "news feed is empty")));
     }
@@ -134,10 +138,16 @@ mod tests {
         ]"#;
         let items: Vec<NewsItem> = serde_json::from_str(body).unwrap();
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].author_name(crate::lang::Language::English), "rizer001");
+        assert_eq!(
+            items[0].author_name(crate::lang::Language::English),
+            "rizer001"
+        );
         assert!(items[0].author_avatar().is_some());
         assert!(items[1].author.is_none());
-        assert_eq!(items[1].author_name(crate::lang::Language::English), "Unknown");
+        assert_eq!(
+            items[1].author_name(crate::lang::Language::English),
+            "Unknown"
+        );
     }
 
     #[test]

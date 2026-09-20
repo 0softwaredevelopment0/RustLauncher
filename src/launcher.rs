@@ -102,11 +102,7 @@ pub fn split_server_address(addr: &str) -> (String, String) {
 
 /// Extract native libraries (`.dll/.so/.dylib`) from `*natives*.jar` files
 /// under the libraries directory into the natives directory.
-pub fn extract_natives(
-    libraries_dir: &Path,
-    natives_dir: &Path,
-    lang: Language,
-) -> Result<usize> {
+pub fn extract_natives(libraries_dir: &Path, natives_dir: &Path, lang: Language) -> Result<usize> {
     let mut count = 0;
     for jar in crate::classpath::collect_jars(libraries_dir) {
         let Some(name) = jar.file_name().and_then(|n| n.to_str()) else {
@@ -193,7 +189,11 @@ pub fn build_launch_plan(
         if extracted > 0 {
             println!(
                 "[RustLauncher] {}",
-                tr_fmt(lang, "Extracted {0} native libraries", &[&extracted.to_string()])
+                tr_fmt(
+                    lang,
+                    "Extracted {0} native libraries",
+                    &[&extracted.to_string()]
+                )
             );
         }
     }

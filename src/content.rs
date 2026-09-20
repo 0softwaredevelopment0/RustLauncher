@@ -355,8 +355,8 @@ pub fn search_modrinth(
         url.push_str(&format!("&query={}", urlquery(query.trim())));
     }
     let body = net::get_string(agent, &url, lang)?;
-    let parsed: ModrinthSearch =
-        serde_json::from_str(&body).context(tr(lang, "failed to parse the Modrinth search response"))?;
+    let parsed: ModrinthSearch = serde_json::from_str(&body)
+        .context(tr(lang, "failed to parse the Modrinth search response"))?;
     Ok(parsed
         .hits
         .into_iter()
@@ -376,7 +376,11 @@ pub fn search_modrinth(
 }
 
 /// Fetch the full project page of a Modrinth project.
-pub fn modrinth_project(agent: &ureq::Agent, project_id: &str, lang: Language) -> Result<ProjectDetail> {
+pub fn modrinth_project(
+    agent: &ureq::Agent,
+    project_id: &str,
+    lang: Language,
+) -> Result<ProjectDetail> {
     let body = net::get_string(
         agent,
         &format!("https://api.modrinth.com/v2/project/{project_id}"),
@@ -417,8 +421,8 @@ pub fn modrinth_versions(
         }
     }
     let body = net::get_string(agent, &url, lang)?;
-    let parsed: Vec<ModrinthVersion> =
-        serde_json::from_str(&body).context(tr(lang, "failed to parse the Modrinth versions response"))?;
+    let parsed: Vec<ModrinthVersion> = serde_json::from_str(&body)
+        .context(tr(lang, "failed to parse the Modrinth versions response"))?;
     Ok(parsed
         .into_iter()
         .map(|v| {
@@ -585,12 +589,8 @@ impl VersionSort {
         match self {
             VersionSort::Newest => tr(lang, "Newest").to_string(),
             VersionSort::Oldest => tr(lang, "Oldest").to_string(),
-            VersionSort::NumberDesc => {
-                tr_fmt(lang, "Number {0}", &[crate::icons::ARROW_DOWNWARD])
-            }
-            VersionSort::NumberAsc => {
-                tr_fmt(lang, "Number {0}", &[crate::icons::ARROW_UPWARD])
-            }
+            VersionSort::NumberDesc => tr_fmt(lang, "Number {0}", &[crate::icons::ARROW_DOWNWARD]),
+            VersionSort::NumberAsc => tr_fmt(lang, "Number {0}", &[crate::icons::ARROW_UPWARD]),
             VersionSort::NameAZ => tr_fmt(lang, "A {0} Z", &[crate::icons::ARROW_FORWARD]),
             VersionSort::NameZA => tr_fmt(lang, "Z {0} A", &[crate::icons::ARROW_FORWARD]),
         }

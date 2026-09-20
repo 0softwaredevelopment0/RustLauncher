@@ -322,9 +322,7 @@ impl ServerStatus {
     pub fn display(&self, lang: Language) -> String {
         match self {
             ServerStatus::Online => tr(lang, "online").to_string(),
-            ServerStatus::Offline(reason) => {
-                tr_fmt(lang, "offline ({0})", &[reason])
-            }
+            ServerStatus::Offline(reason) => tr_fmt(lang, "offline ({0})", &[reason]),
         }
     }
 }

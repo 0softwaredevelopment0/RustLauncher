@@ -38,8 +38,12 @@ pub fn get_bytes(agent: &ureq::Agent, url: &str, lang: Language) -> Result<Vec<u
 /// GET a URL and return the body as a UTF-8 string.
 pub fn get_string(agent: &ureq::Agent, url: &str, lang: Language) -> Result<String> {
     let bytes = get_bytes(agent, url, lang)?;
-    String::from_utf8(bytes)
-        .map_err(|e| anyhow!("{}", tr_fmt(lang, "non-UTF-8 body from {0}: {1}", &[url, &e.to_string()])))
+    String::from_utf8(bytes).map_err(|e| {
+        anyhow!(
+            "{}",
+            tr_fmt(lang, "non-UTF-8 body from {0}: {1}", &[url, &e.to_string()])
+        )
+    })
 }
 
 /// Map ureq transport errors to human-readable causes (port of the Java
@@ -60,10 +64,9 @@ pub fn classify(err: ureq::Error, lang: Language) -> anyhow::Error {
                     "{}",
                     tr_fmt(lang, "DNS resolution failed: {0}", &[&message])
                 ),
-                ureq::ErrorKind::ConnectionFailed => anyhow!(
-                    "{}",
-                    tr_fmt(lang, "connection failed: {0}", &[&message])
-                ),
+                ureq::ErrorKind::ConnectionFailed => {
+                    anyhow!("{}", tr_fmt(lang, "connection failed: {0}", &[&message]))
+                }
                 _ => anyhow!("{}", tr_fmt(lang, "network error: {0}", &[&message])),
             }
         }

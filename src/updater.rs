@@ -148,8 +148,8 @@ fn default_true() -> bool {
 fn fetch_fabric_builds(agent: &ureq::Agent, mc: &str, lang: Language) -> Result<Vec<LoaderBuild>> {
     let url = format!("https://meta.fabricmc.net/v2/versions/loader/{mc}");
     let body = net::get_string(agent, &url, lang)?;
-    let entries: Vec<FabricLoaderEntry> =
-        serde_json::from_str(&body).context(tr(lang, "failed to parse the Fabric meta response"))?;
+    let entries: Vec<FabricLoaderEntry> = serde_json::from_str(&body)
+        .context(tr(lang, "failed to parse the Fabric meta response"))?;
     Ok(entries
         .into_iter()
         .map(|e| LoaderBuild {
@@ -186,7 +186,11 @@ fn fetch_quilt_builds(agent: &ureq::Agent, mc: &str, lang: Language) -> Result<V
         .collect())
 }
 
-fn fetch_neoforge_builds(_agent: &ureq::Agent, mc: &str, lang: Language) -> Result<Vec<LoaderBuild>> {
+fn fetch_neoforge_builds(
+    _agent: &ureq::Agent,
+    mc: &str,
+    lang: Language,
+) -> Result<Vec<LoaderBuild>> {
     let (major, minor) = neoforge_major_minor(mc, lang)?;
     let url = "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge";
     let agent = net::agent();
@@ -195,8 +199,8 @@ fn fetch_neoforge_builds(_agent: &ureq::Agent, mc: &str, lang: Language) -> Resu
     struct Versions {
         versions: Vec<String>,
     }
-    let parsed: Versions =
-        serde_json::from_str(&body).context(tr(lang, "failed to parse the NeoForge maven metadata"))?;
+    let parsed: Versions = serde_json::from_str(&body)
+        .context(tr(lang, "failed to parse the NeoForge maven metadata"))?;
     let prefix = format!("{major}.{minor}.");
     let mut builds: Vec<LoaderBuild> = parsed
         .versions
@@ -221,24 +225,37 @@ fn neoforge_major_minor(mc: &str, lang: Language) -> Result<(u32, u32)> {
         .next()
         .and_then(|p| p.parse::<u32>().ok())
         .ok_or_else(|| {
-            anyhow!("{}", tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc]))
+            anyhow!(
+                "{}",
+                tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc])
+            )
         })?;
     let minor = parts
         .next()
         .and_then(|p| p.parse::<u32>().ok())
         .ok_or_else(|| {
-            anyhow!("{}", tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc]))
+            anyhow!(
+                "{}",
+                tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc])
+            )
         })?;
     let patch = parts
         .next()
         .and_then(|p| p.parse::<u32>().ok())
         .ok_or_else(|| {
-            anyhow!("{}", tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc]))
+            anyhow!(
+                "{}",
+                tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc])
+            )
         })?;
     if minor < 20 || (minor == 20 && patch < 2) {
         return Err(anyhow!(
             "{}",
-            tr_fmt(lang, "NeoForge does not support {0} (requires 1.20.2+)", &[mc])
+            tr_fmt(
+                lang,
+                "NeoForge does not support {0} (requires 1.20.2+)",
+                &[mc]
+            )
         ));
     }
     Ok((minor, patch))
@@ -388,18 +405,18 @@ pub fn install_version(
 
     // 1. version.json
     let meta_bytes = net::get_bytes(agent, &version.url, lang)?;
-    let meta: VersionMeta =
-        serde_json::from_slice(&meta_bytes).context(tr(lang, "failed to parse the version metadata"))?;
+    let meta: VersionMeta = serde_json::from_slice(&meta_bytes)
+        .context(tr(lang, "failed to parse the version metadata"))?;
     let json_path = version_dir.join(format!("{id}.json"));
     std::fs::write(&json_path, &meta_bytes)?;
 
     // 2. client jar
-    let jar = meta
-        .downloads
-        .get("client")
-        .ok_or_else(|| {
-            anyhow!("{}", tr_fmt(lang, "version {0} has no client download", &[id]))
-        })?;
+    let jar = meta.downloads.get("client").ok_or_else(|| {
+        anyhow!(
+            "{}",
+            tr_fmt(lang, "version {0} has no client download", &[id])
+        )
+    })?;
     let jar_path = version_dir.join(format!("{id}.jar"));
     let mut downloaded = 0usize;
     if fetch_to_file(agent, &jar.url, &jar_path, &jar.sha1, &mut progress, lang)? {
@@ -422,8 +439,8 @@ pub fn install_version(
     let index_bytes = net::get_bytes(agent, &asset_index.url, lang)?;
     std::fs::create_dir_all(index_path.parent().unwrap())?;
     std::fs::write(&index_path, &index_bytes)?;
-    let index: AssetIndex =
-        serde_json::from_slice(&index_bytes).context(tr(lang, "failed to parse the asset index"))?;
+    let index: AssetIndex = serde_json::from_slice(&index_bytes)
+        .context(tr(lang, "failed to parse the asset index"))?;
 
     let objects_dir = game_dir.join("assets").join("objects");
     let total = index.objects.len();
@@ -441,7 +458,11 @@ pub fn install_version(
             downloaded += 1;
         }
         if (i + 1) % 200 == 0 || i + 1 == total {
-            progress(&tr_fmt(lang, "assets {0}/{1}", &[&(i + 1).to_string(), &total.to_string()]));
+            progress(&tr_fmt(
+                lang,
+                "assets {0}/{1}",
+                &[&(i + 1).to_string(), &total.to_string()],
+            ));
         }
     }
 
@@ -557,9 +578,7 @@ pub fn install_loader(
             };
             let bytes = net::get_bytes(agent, &profile_json, lang)?;
             let profile: LoaderProfile = serde_json::from_slice(&bytes)
-                .with_context(|| {
-                    tr_fmt(lang, "bad {0} profile for {1}", &[loader.label(), mc])
-                })?;
+                .with_context(|| tr_fmt(lang, "bad {0} profile for {1}", &[loader.label(), mc]))?;
 
             // Download every library the profile references.
             let libs_dir = game_dir.join("libraries");
@@ -573,7 +592,10 @@ pub fn install_loader(
             for (i, lib) in libs.iter().enumerate() {
                 let (url, sha1) = library_source(lib, loader)?;
                 let dest = coordinate_to_path(&libs_dir, &lib.name).ok_or_else(|| {
-                    anyhow!("{}", tr_fmt(lang, "bad library coordinate: {0}", &[&lib.name]))
+                    anyhow!(
+                        "{}",
+                        tr_fmt(lang, "bad library coordinate: {0}", &[&lib.name])
+                    )
                 })?;
                 if fetch_to_file(agent, &url, &dest, &sha1, &mut progress, lang)? {
                     downloaded += 1;
@@ -616,7 +638,10 @@ pub fn install_loader(
             let libs_dir = game_dir.join("libraries");
             let (url, _) = library_source(&lib, loader)?;
             let dest = coordinate_to_path(&libs_dir, &lib.name).ok_or_else(|| {
-                anyhow!("{}", tr_fmt(lang, "bad library coordinate: {0}", &[&lib.name]))
+                anyhow!(
+                    "{}",
+                    tr_fmt(lang, "bad library coordinate: {0}", &[&lib.name])
+                )
             })?;
             if fetch_to_file(agent, &url, &dest, "", &mut progress, lang)? {
                 downloaded += 1;
@@ -752,7 +777,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("mismatch"));
-        verify_sha1(b"abc", "A9993E364706816ABA3E25717850C26C9CD0D89D", "test", lang).unwrap();
+        verify_sha1(
+            b"abc",
+            "A9993E364706816ABA3E25717850C26C9CD0D89D",
+            "test",
+            lang,
+        )
+        .unwrap();
     }
 
     #[test]

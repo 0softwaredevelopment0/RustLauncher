@@ -173,7 +173,10 @@ pub fn select_java(
         return Ok(path_java);
     }
 
-    Err(anyhow!("{}", tr(lang, "Java not found. Install Java or set a custom path.")))
+    Err(anyhow!(
+        "{}",
+        tr(lang, "Java not found. Install Java or set a custom path.")
+    ))
 }
 
 /// The major version of the selected Java, probed once.
@@ -183,6 +186,181 @@ pub fn selected_java_major(java_exe: &Path, lang: crate::lang::Language) -> Resu
         "failed to probe Java version at {0}",
         &[&java_exe.display().to_string()],
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Installed-runtime inventory (Settings → Java picker).
+// ---------------------------------------------------------------------------
+
+/// A Java runtime found on this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledJava {
+    /// Path to the `java` executable (what the launch plan consumes).
+    pub path: PathBuf,
+    /// Directory that contains `bin/java` (the runtime home).
+    pub home: PathBuf,
+    /// Major version (`8`, `21`, `26`…).
+    pub major: u32,
+    /// Full version string from `java -version` (`21.0.5`, `1.8.0_402`).
+    pub version: String,
+    /// Short vendor hint derived from the install location.
+    pub vendor: String,
+}
+
+impl InstalledJava {
+    /// Combo-box label, e.g. `Temurin 21.0.5`.
+    pub fn label(&self) -> String {
+        format!("{} {}", self.vendor, self.version)
+    }
+}
+
+/// The full version token quoted by `java -version`
+/// (`openjdk version "21.0.5" …` -> `21.0.5`).
+pub fn parse_java_full_version(output: &str) -> Option<String> {
+    let line = output.lines().next()?;
+    let start = line.find('"')? + 1;
+    let end = line[start..].find('"')? + start;
+    Some(line[start..end].to_string())
+}
+
+/// Probe a java executable; `None` when the binary does not answer.
+fn probe(java_exe: &Path) -> Option<(u32, String)> {
+    let output = Command::new(java_exe).arg("-version").output().ok()?;
+    let text = String::from_utf8_lossy(&output.stderr).to_string();
+    let text = if text.trim().is_empty() {
+        String::from_utf8_lossy(&output.stdout).to_string()
+    } else {
+        text
+    };
+    let version = parse_java_full_version(&text)?;
+    let major = parse_java_major_version(&text)?;
+    Some((major, version))
+}
+
+/// Guess a vendor label from the install path (parent folder names like
+/// `Eclipse Adoptium`, dir names like `zulu-21`, `corretto`, `liberica`).
+pub fn vendor_from_path(home: &Path) -> String {
+    let haystack = format!(
+        "{} {}",
+        home.parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        home.display()
+    )
+    .to_ascii_lowercase();
+    let table: &[(&str, &str)] = &[
+        ("temurin", "Temurin"),
+        ("eclipse adoptium", "Temurin"),
+        ("corretto", "Corretto"),
+        ("zulu", "Zulu"),
+        ("liberica", "Liberica"),
+        ("graalvm", "GraalVM"),
+        ("microsoft", "Microsoft"),
+        ("jdk-1.8", "Oracle"),
+        ("jdk1.", "Oracle"),
+        ("oracle", "Oracle"),
+        ("jdk-", "Oracle"),
+    ];
+    for (needle, label) in table {
+        if haystack.contains(needle) {
+            return label.to_string();
+        }
+    }
+    if haystack.contains("runtimes") {
+        return "RustLauncher".to_string();
+    }
+    "Java".to_string()
+}
+
+fn push_candidate(java_exe: PathBuf, out: &mut Vec<InstalledJava>) {
+    let home = java_exe
+        .parent()
+        .and_then(|bin| bin.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| java_exe.clone());
+    let key = home.display().to_string().to_ascii_lowercase();
+    if out
+        .iter()
+        .any(|j| j.home.display().to_string().to_ascii_lowercase() == key)
+    {
+        return;
+    }
+    let Some((major, version)) = probe(&java_exe) else {
+        return;
+    };
+    let vendor = vendor_from_path(&home);
+    out.push(InstalledJava {
+        path: java_exe,
+        home,
+        major,
+        version,
+        vendor,
+    });
+}
+
+/// Extra scan roots: runtimes downloaded by the launcher and `JAVA_HOME`.
+fn extra_java_roots(runtimes_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(dir) = runtimes_dir {
+        roots.push(dir.to_path_buf());
+    }
+    if let Some(home) = std::env::var_os("JAVA_HOME") {
+        if !home.is_empty() {
+            roots.push(PathBuf::from(home));
+        }
+    }
+    roots
+}
+
+/// Inventory every installed Java on this machine: the well-known Windows
+/// install roots, the launcher's own `runtimes/` downloads, `JAVA_HOME` and
+/// every `PATH` entry — including installations that are not on `PATH`.
+/// Each candidate is verified with a `java -version` probe.
+pub fn detect_installed_javas(runtimes_dir: Option<&Path>) -> Vec<InstalledJava> {
+    let mut out: Vec<InstalledJava> = Vec::new();
+
+    // Roots whose direct children are runtime homes.
+    let mut home_roots = common_java_roots();
+    home_roots.extend(extra_java_roots(runtimes_dir));
+    for root in &home_roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            for bin_dir in [dir.join("bin"), dir.join("jre/bin")] {
+                for name in java_binary_names() {
+                    push_candidate(bin_dir.join(name), &mut out);
+                }
+            }
+            // Nested one level deeper (e.g. runtimes/<name>/<jdk-home>/bin).
+            if let Ok(nested) = std::fs::read_dir(&dir) {
+                for nested_entry in nested.flatten() {
+                    let nested_dir = nested_entry.path();
+                    if !nested_dir.is_dir() {
+                        continue;
+                    }
+                    for name in java_binary_names() {
+                        push_candidate(nested_dir.join("bin").join(name), &mut out);
+                    }
+                }
+            }
+        }
+    }
+
+    // Anything on PATH (may point outside the roots above).
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        for name in java_binary_names() {
+            push_candidate(dir.join(name), &mut out);
+        }
+    }
+
+    // Newest first; ties fall back to path for a stable order.
+    out.sort_by(|a, b| b.major.cmp(&a.major).then(a.path.cmp(&b.path)));
+    out
 }
 
 #[cfg(test)]
@@ -220,5 +398,45 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn parses_full_version_token() {
+        let out = "openjdk version \"21.0.5\" 2024-10-15\nOpenJDK Runtime Environment";
+        assert_eq!(parse_java_full_version(out).as_deref(), Some("21.0.5"));
+        let out = "java version \"1.8.0_402\"\nJava(TM) SE Runtime Environment";
+        assert_eq!(parse_java_full_version(out).as_deref(), Some("1.8.0_402"));
+        assert_eq!(parse_java_full_version("garbage"), None);
+    }
+
+    #[test]
+    fn vendor_labels_from_paths() {
+        let f = |p: &str| vendor_from_path(Path::new(p));
+        assert_eq!(
+            f("C:/Program Files/Eclipse Adoptium/jdk-21.0.5+11-hotspot"),
+            "Temurin"
+        );
+        assert_eq!(f("C:/Program Files/Zulu/zulu-21"), "Zulu");
+        assert_eq!(
+            f("C:/Program Files/Amazon Corretto/jdk21.0.5_11"),
+            "Corretto"
+        );
+        assert_eq!(f("C:/Program Files/Microsoft/jdk-21.0.5+11"), "Microsoft");
+        assert_eq!(f("C:/Program Files/Java/jdk-17"), "Oracle");
+        assert_eq!(f("C:/Program Files/Java/jdk1.8.0_402"), "Oracle");
+        assert_eq!(f("C:/home/runtimes/Temurin-21.0.5+11"), "Temurin");
+        assert_eq!(f("C:/somewhere/plain-jdk"), "Java");
+    }
+
+    #[test]
+    fn labels_combine_vendor_and_version() {
+        let j = InstalledJava {
+            path: PathBuf::from("C:/x/bin/java.exe"),
+            home: PathBuf::from("C:/x"),
+            major: 21,
+            version: "21.0.5".into(),
+            vendor: "Temurin".into(),
+        };
+        assert_eq!(j.label(), "Temurin 21.0.5");
     }
 }

@@ -5,9 +5,9 @@ use std::sync::atomic::Ordering;
 
 use crate::diagnostics;
 use crate::icons;
-use crate::lang::{Language, tr, tr_fmt};
+use crate::lang::{tr, tr_fmt, Language};
 use crate::news::{self, NewsItem};
-use crate::settings;
+use crate::settings::{self, JavaSelection};
 
 use super::state::{App, ContentPlatform, Screen};
 
@@ -115,10 +115,14 @@ impl App {
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(format!("{}  {}", icons::CHEVRON_RIGHT, tr(lang, "Read more")))
-                        .small()
-                        .strong()
-                        .color(egui::Color32::from_rgb(0, 200, 255)),
+                    egui::RichText::new(format!(
+                        "{}  {}",
+                        icons::CHEVRON_RIGHT,
+                        tr(lang, "Read more")
+                    ))
+                    .small()
+                    .strong()
+                    .color(egui::Color32::from_rgb(0, 200, 255)),
                 );
             })
             .response;
@@ -169,9 +173,10 @@ impl App {
         let lang = self.settings.language;
         ui.heading(tr(lang, "Settings"));
         ui.add_space(4.0);
-        // Java-mode checkboxes mirror `use_custom_java`; only one is checked.
-        let mut default_java = !self.settings.use_custom_java;
-        let mut custom_java = self.settings.use_custom_java;
+        // Java selection: Auto / a detected runtime / a custom executable.
+        if !self.java_scanned && !self.java_scan_loading {
+            self.start_java_scan();
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
             // Language first: it applies immediately, no save needed.
             ui.strong(tr(lang, "Language"));
@@ -194,36 +199,94 @@ impl App {
                     .small()
                     .color(egui::Color32::GRAY),
             );
-            // Java: Default vs Custom, switched with checkboxes.
+            // ── Java ──
             ui.strong(tr(lang, "Java"));
+            ui.add_space(2.0);
             ui.horizontal(|ui| {
-                if ui
-                    .checkbox(&mut default_java, tr(lang, "Default (auto-detect)"))
-                    .changed()
-                    && default_java
-                {
-                    self.settings.use_custom_java = false;
+                ui.label(tr(lang, "Java runtime"));
+                let selected = match &self.settings.java_mode {
+                    JavaSelection::Auto => tr(lang, "Auto-detect").to_string(),
+                    JavaSelection::Installed(p) => self.java_label_for(p),
+                    JavaSelection::Custom(p) if p.trim().is_empty() => {
+                        tr(lang, "Custom (not set)").to_string()
+                    }
+                    JavaSelection::Custom(_) => tr(lang, "Custom path").to_string(),
+                };
+                egui::ComboBox::from_id_salt("java_mode")
+                    .selected_text(selected)
+                    .width(280.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.settings.java_mode,
+                            JavaSelection::Auto,
+                            tr(lang, "Auto-detect"),
+                        );
+                        for j in &self.java_installed {
+                            ui.selectable_value(
+                                &mut self.settings.java_mode,
+                                JavaSelection::Installed(j.path.display().to_string()),
+                                j.label(),
+                            )
+                            .on_hover_text(j.path.display().to_string());
+                        }
+                        let is_custom = matches!(self.settings.java_mode, JavaSelection::Custom(_));
+                        if ui
+                            .selectable_label(is_custom, tr(lang, "Custom path…"))
+                            .clicked()
+                        {
+                            let current = self.settings.java_mode.clone();
+                            self.settings.java_mode = JavaSelection::Custom(
+                                current.path().unwrap_or_default().to_string(),
+                            );
+                        }
+                    });
+                if self.java_scan_loading {
+                    ui.spinner();
                 }
-                if ui.checkbox(&mut custom_java, tr(lang, "Custom path")).changed() && custom_java
+                if ui
+                    .button(icons::REFRESH)
+                    .on_hover_text(tr(lang, "Rescan installed Java runtimes"))
+                    .clicked()
                 {
-                    self.settings.use_custom_java = true;
+                    self.start_java_scan();
                 }
             });
-            ui.add_enabled_ui(self.settings.use_custom_java, |ui| {
+            if let Some(p) = self.settings.java_mode.path() {
+                if !std::path::Path::new(p).is_file() {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        tr(lang, "Selected Java path does not exist."),
+                    );
+                }
+            }
+            if let JavaSelection::Custom(path) = &mut self.settings.java_mode {
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Java executable"));
-                    ui.add_enabled(
-                        true,
-                        egui::TextEdit::singleline(&mut self.settings.java_path)
-                            .desired_width(360.0),
-                    );
-                    if ui.button("…").clicked() {
+                    ui.add(egui::TextEdit::singleline(path).desired_width(320.0));
+                    if ui.button(icons::FOLDER).clicked() {
                         if let Some(file) = rfd::FileDialog::new().pick_file() {
-                            self.settings.java_path = file.to_string_lossy().to_string();
+                            *path = file.to_string_lossy().to_string();
                         }
                     }
                 });
-            });
+            }
+            ui.add_space(4.0);
+
+            // ── Download Java (collapsed by default) ──
+            let header_icon = if self.java_download_open {
+                icons::EXPAND_LESS
+            } else {
+                icons::EXPAND_MORE
+            };
+            if ui
+                .button(format!("{header_icon} {}", tr(lang, "Download Java")))
+                .clicked()
+            {
+                self.java_download_open = !self.java_download_open;
+            }
+            if self.java_download_open {
+                self.ui_java_download(ui, lang);
+            }
             ui.add_space(4.0);
 
             // JVM flags: presets + free edit; heap flags are mandatory.
@@ -380,16 +443,18 @@ impl App {
                                 .add_filter("Image", &["png", "jpg", "jpeg"])
                                 .pick_file()
                             {
-                                self.settings.theme.bg_image =
-                                    file.to_string_lossy().to_string();
+                                self.settings.theme.bg_image = file.to_string_lossy().to_string();
                                 self.settings.theme.preset = settings::ThemePreset::Custom;
                             }
                         }
                     });
                     ui.label(
-                        egui::RichText::new(tr(lang, "PNG or JPG photo, stretched to cover the window."))
-                            .small()
-                            .color(egui::Color32::GRAY),
+                        egui::RichText::new(tr(
+                            lang,
+                            "PNG or JPG photo, stretched to cover the window.",
+                        ))
+                        .small()
+                        .color(egui::Color32::GRAY),
                     );
                 }
             }
@@ -463,6 +528,158 @@ impl App {
             {
                 self.settings_reset_pending = true;
             }
+        });
+    }
+
+    /// The collapsed-by-default "Download Java" section: edition, major and
+    /// sub-version pickers plus the download button.
+    fn ui_java_download(&mut self, ui: &mut egui::Ui, lang: Language) {
+        use crate::java_download;
+
+        ui.indent("java_download", |ui| {
+            let prev_edition = self.java_dl_edition.clone();
+            let prev_major = self.java_dl_major;
+
+            ui.horizontal(|ui| {
+                // Edition.
+                let edition_label = java_download::find_edition(&self.java_dl_edition)
+                    .map(|e| e.label)
+                    .unwrap_or(&self.java_dl_edition)
+                    .to_string();
+                ui.label(tr(lang, "Edition"));
+                egui::ComboBox::from_id_salt("java_dl_edition")
+                    .selected_text(edition_label)
+                    .width(220.0)
+                    .show_ui(ui, |ui| {
+                        for e in java_download::EDITIONS {
+                            ui.selectable_value(
+                                &mut self.java_dl_edition,
+                                e.id.to_string(),
+                                e.label,
+                            );
+                        }
+                    });
+
+                // Major version.
+                ui.label(tr(lang, "Version"));
+                egui::ComboBox::from_id_salt("java_dl_major")
+                    .selected_text(self.java_dl_major.to_string())
+                    .width(70.0)
+                    .show_ui(ui, |ui| {
+                        for m in java_download::list_majors() {
+                            ui.selectable_value(&mut self.java_dl_major, m, m.to_string());
+                        }
+                    });
+            });
+
+            // Reset the sub-version pick when the edition/major changed.
+            if self.java_dl_edition != prev_edition || self.java_dl_major != prev_major {
+                self.java_dl_sub = None;
+            }
+
+            // Fetch the sub-version list on demand.
+            let key = (self.java_dl_edition.clone(), self.java_dl_major);
+            if !self.java_versions.contains_key(&key)
+                && !self.java_versions_loading.contains(&key)
+            {
+                self.java_versions_loading.insert(key.clone());
+                let lang = self.settings.language;
+                let (edition, major) = (key.0.clone(), key.1);
+                let edition_task = edition.clone();
+                self.spawn_job(
+                    move || {
+                        java_download::list_sub_versions(
+                            &crate::net::agent(),
+                            lang,
+                            &edition_task,
+                            major,
+                        )
+                        .map_err(|e| e.to_string())
+                    },
+                    move |app, result| {
+                        app.java_versions_loading.remove(&(edition.clone(), major));
+                        app.java_versions.insert((edition, major), result);
+                    },
+                );
+            }
+
+            ui.horizontal(|ui| {
+                // Sub-version.
+                match self.java_versions.get(&key) {
+                    Some(Ok(list)) => {
+                        let selected = self
+                            .java_dl_sub
+                            .clone()
+                            .unwrap_or_else(|| tr(lang, "Select build…").to_string());
+                        ui.label(tr(lang, "Build"));
+                        egui::ComboBox::from_id_salt("java_dl_sub")
+                            .selected_text(selected)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                for s in list {
+                                    ui.selectable_value(
+                                        &mut self.java_dl_sub,
+                                        Some(s.id.clone()),
+                                        s.label.clone(),
+                                    );
+                                }
+                            });
+                    }
+                    Some(Err(e)) => {
+                        ui.colored_label(egui::Color32::LIGHT_RED, e.clone());
+                        if ui
+                            .small_button(icons::REFRESH)
+                            .on_hover_text(tr(lang, "Retry"))
+                            .clicked()
+                        {
+                            self.java_versions.remove(&key);
+                            self.java_versions_loading.remove(&key);
+                        }
+                    }
+                    None => {
+                        ui.spinner();
+                        ui.weak(tr(lang, "Loading builds…"));
+                    }
+                }
+
+                // Download button.
+                let can_download =
+                    self.java_dl_sub.is_some() && self.java_downloading.is_none();
+                if ui
+                    .add_enabled(
+                        can_download,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            icons::FILE_DOWNLOAD,
+                            tr(lang, "Download")
+                        )),
+                    )
+                    .clicked()
+                {
+                    if let Some(sub) = self.java_dl_sub.clone() {
+                        self.start_java_download(sub);
+                    }
+                }
+            });
+
+            if let Some((edition, major, sub)) = &self.java_downloading {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak(tr_fmt(
+                        lang,
+                        "Downloading Java {0} ({1})…",
+                        &[&format!("{major} {sub}"), edition],
+                    ));
+                });
+            }
+            ui.label(
+                egui::RichText::new(tr(
+                    lang,
+                    "Runtimes install into the launcher's runtimes/ folder and appear in the Java picker after the scan.",
+                ))
+                .small()
+                .color(egui::Color32::GRAY),
+            );
         });
     }
 
@@ -541,22 +758,46 @@ impl eframe::App for App {
             ui.heading("RustLauncher");
             ui.add_space(8.0);
             for (screen, label) in [
-                (Screen::General, format!("{}  {}", icons::PLAY_ARROW, tr(lang, "General"))),
-                (Screen::Console, format!("{}  {}", icons::TERMINAL, tr(lang, "Console"))),
+                (
+                    Screen::General,
+                    format!("{}  {}", icons::PLAY_ARROW, tr(lang, "General")),
+                ),
+                (
+                    Screen::Console,
+                    format!("{}  {}", icons::TERMINAL, tr(lang, "Console")),
+                ),
                 (
                     Screen::Instances,
                     format!("{}  {}", icons::VIDEOGAME_ASSET, tr(lang, "Instances")),
                 ),
-                (Screen::Versions, format!("{}  {}", icons::LAYERS, tr(lang, "Versions"))),
-                (Screen::Servers, format!("{}  {}", icons::DNS, tr(lang, "Servers"))),
+                (
+                    Screen::Versions,
+                    format!("{}  {}", icons::LAYERS, tr(lang, "Versions")),
+                ),
+                (
+                    Screen::Servers,
+                    format!("{}  {}", icons::DNS, tr(lang, "Servers")),
+                ),
                 (
                     Screen::Accounts,
                     format!("{}  {}", icons::ACCOUNT_CIRCLE, tr(lang, "Accounts")),
                 ),
-                (Screen::Skins, format!("{}  {}", icons::FACE, tr(lang, "Skins"))),
-                (Screen::Modrinth, format!("{}  {}", icons::EXTENSION, tr(lang, "Modrinth"))),
-                (Screen::News, format!("{}  {}", icons::ARTICLE, tr(lang, "News"))),
-                (Screen::Settings, format!("{}  {}", icons::SETTINGS, tr(lang, "Settings"))),
+                (
+                    Screen::Skins,
+                    format!("{}  {}", icons::FACE, tr(lang, "Skins")),
+                ),
+                (
+                    Screen::Modrinth,
+                    format!("{}  {}", icons::EXTENSION, tr(lang, "Modrinth")),
+                ),
+                (
+                    Screen::News,
+                    format!("{}  {}", icons::ARTICLE, tr(lang, "News")),
+                ),
+                (
+                    Screen::Settings,
+                    format!("{}  {}", icons::SETTINGS, tr(lang, "Settings")),
+                ),
                 (
                     Screen::Diagnostics,
                     format!("{}  {}", icons::BUILD, tr(lang, "Diagnostics")),
@@ -666,7 +907,9 @@ impl App {
                 ui.add_space(14.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(egui::Button::new(egui::RichText::new(tr(lang, "Confirm")).strong()))
+                        .add(egui::Button::new(
+                            egui::RichText::new(tr(lang, "Confirm")).strong(),
+                        ))
                         .clicked()
                     {
                         self.settings_reset_pending = false;

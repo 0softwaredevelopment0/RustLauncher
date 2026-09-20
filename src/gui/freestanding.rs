@@ -2,7 +2,7 @@
 //! version list, version-name helpers, launch/stop/kill process plumbing,
 //! toast text shaping and painter-drawn material icons.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,7 +21,7 @@ use crate::logs::SessionLog;
 use crate::news;
 use crate::notifications::{Toast, ToastKind, Toasts};
 use crate::servers::ServerStore;
-use crate::settings::{self, Settings};
+use crate::settings::{self, JavaSelection, Settings};
 use crate::skins;
 use crate::updater::{self};
 use crate::version::{self, Version};
@@ -114,6 +114,16 @@ impl App {
             skin_status: String::new(),
             news: None,
             news_selected: None,
+            java_installed: Vec::new(),
+            java_scan_loading: false,
+            java_scanned: false,
+            java_versions: BTreeMap::new(),
+            java_versions_loading: BTreeSet::new(),
+            java_dl_edition: "temurin".to_string(),
+            java_dl_major: 21,
+            java_dl_sub: None,
+            java_downloading: None,
+            java_download_open: false,
             diag_results: None,
             diag_running: false,
             jobs: Arc::new(Mutex::new(Vec::new())),
@@ -134,6 +144,77 @@ impl App {
 
     // ── helpers ────────────────────────────────────────────────
 
+    /// Scan the machine for installed Java runtimes in the background.
+    pub(crate) fn start_java_scan(&mut self) {
+        self.java_scan_loading = true;
+        self.java_scanned = true;
+        let runtimes = self.home_dir.join("runtimes");
+        self.spawn_job(
+            move || crate::java_locator::detect_installed_javas(Some(&runtimes)),
+            |app, list| {
+                app.java_installed = list;
+                app.java_scan_loading = false;
+            },
+        );
+    }
+
+    /// Combo label for a configured Java path: the detected
+    /// `Vendor version` when the path is in the inventory, else the path.
+    pub(crate) fn java_label_for(&self, path: &str) -> String {
+        if let Some(j) = self
+            .java_installed
+            .iter()
+            .find(|j| j.path.display().to_string() == path)
+        {
+            return j.label();
+        }
+        path.to_string()
+    }
+
+    /// Download + unpack a runtime in the background and select it when it
+    /// lands. Uses the edition/major currently chosen in the download UI.
+    pub(crate) fn start_java_download(&mut self, sub: String) {
+        let edition = self.java_dl_edition.clone();
+        let major = self.java_dl_major;
+        self.java_downloading = Some((edition.clone(), major, sub.clone()));
+        let runtimes = self.home_dir.join("runtimes");
+        let lang = self.settings.language;
+        self.spawn_job(
+            move || {
+                crate::java_download::install_runtime(
+                    &crate::net::agent(),
+                    lang,
+                    &edition,
+                    major,
+                    &sub,
+                    &runtimes,
+                )
+                .map(|p| p.display().to_string())
+                .map_err(|e| e.to_string())
+            },
+            |app, result| {
+                app.java_downloading = None;
+                match result {
+                    Ok(java_path) => {
+                        app.settings.java_mode = JavaSelection::Installed(java_path.clone());
+                        let _ = app.settings.save(&app.home_dir);
+                        // Re-scan so the combo shows the new runtime.
+                        app.start_java_scan();
+                        let label = app.java_label_for(&java_path);
+                        app.notify_info(tr_fmt(
+                            app.settings.language,
+                            "Java runtime installed: {0}",
+                            &[&label],
+                        ));
+                    }
+                    Err(e) => {
+                        app.notify_error("java-download-failed", &e);
+                    }
+                }
+            },
+        );
+    }
+
     pub(crate) fn log_console(&self, line: impl Into<String>) {
         let mut console = self.console.lock().unwrap_or_else(|e| e.into_inner());
         console.push(line.into());
@@ -146,9 +227,9 @@ impl App {
     /// Whether the console is currently following a live game (so the
     /// command line can send to it).
     pub(crate) fn console_follows_running(&self) -> bool {
-        self.running_games.iter().any(|g| {
-            g.running.load(Ordering::SeqCst) && Arc::ptr_eq(&g.console, &self.console)
-        })
+        self.running_games
+            .iter()
+            .any(|g| g.running.load(Ordering::SeqCst) && Arc::ptr_eq(&g.console, &self.console))
     }
 
     /// Send one line to the followed game's stdin (a chat line or a command)
@@ -158,9 +239,7 @@ impl App {
         let stdin = self
             .running_games
             .iter()
-            .find(|g| {
-                g.running.load(Ordering::SeqCst) && Arc::ptr_eq(&g.console, &self.console)
-            })
+            .find(|g| g.running.load(Ordering::SeqCst) && Arc::ptr_eq(&g.console, &self.console))
             .map(|g| g.stdin.clone());
         let Some(stdin) = stdin else {
             return false;
@@ -215,7 +294,11 @@ impl App {
         };
         match std::fs::write(&path, text) {
             Ok(()) => {
-                let msg = tr_fmt(lang, "Console exported to {0}", &[&path.display().to_string()]);
+                let msg = tr_fmt(
+                    lang,
+                    "Console exported to {0}",
+                    &[&path.display().to_string()],
+                );
                 self.log_console(msg.clone());
                 self.notify_info(msg);
             }
@@ -406,7 +489,7 @@ impl App {
         }
 
         // Custom Java mode must have an actual path.
-        if self.settings.use_custom_java && self.settings.java_path.trim().is_empty() {
+        if self.settings.java_mode.is_empty_path() {
             self.launch_error = Some(
                 tr(
                     lang,
@@ -490,16 +573,8 @@ impl App {
         self.spawn_job(
             move || {
                 let result = run_game_process(
-                    &game_dir,
-                    &version,
-                    &account,
-                    &settings,
-                    console,
-                    file_log,
-                    &home_dir,
-                    log,
-                    pid,
-                    stdin,
+                    &game_dir, &version, &account, &settings, console, file_log, &home_dir, log,
+                    pid, stdin,
                 );
                 running.store(false, Ordering::SeqCst);
                 if let Err(e) = &result {
@@ -523,7 +598,11 @@ impl App {
                         app.play_status = if code == 0 {
                             tr_fmt(lang, "{0} exited normally", &[&instance])
                         } else {
-                            tr_fmt(lang, "{0} exited with code {1}", &[&instance, &code.to_string()])
+                            tr_fmt(
+                                lang,
+                                "{0} exited with code {1}",
+                                &[&instance, &code.to_string()],
+                            )
                         };
                         if code == 0 {
                             app.notify_info(tr_fmt(lang, "{0} stopped", &[&instance]));
@@ -1069,8 +1148,7 @@ fn paint_cover(painter: &egui::Painter, screen: egui::Rect, tex: &egui::TextureH
     if iw == 0 || ih == 0 {
         return;
     }
-    let scale =
-        (screen.width() / iw as f32).max(screen.height() / ih as f32);
+    let scale = (screen.width() / iw as f32).max(screen.height() / ih as f32);
     let size = egui::vec2(iw as f32 * scale, ih as f32 * scale);
     let rect = egui::Rect::from_center_size(screen.center(), size);
     painter.image(
@@ -1125,11 +1203,7 @@ pub(crate) fn run_game_process(
         &version.jar,
         account,
         &settings.java_args,
-        if settings.use_custom_java && !settings.java_path.trim().is_empty() {
-            Some(settings.java_path.trim())
-        } else {
-            None
-        },
+        settings.java_mode.path(),
         if settings.auto_connect && !settings.connect_server_ip.trim().is_empty() {
             Some(settings.connect_server_ip.trim())
         } else {

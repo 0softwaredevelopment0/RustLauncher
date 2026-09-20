@@ -123,7 +123,13 @@ pub fn login_elyby(username: &str, password: &str, lang: Language) -> Result<Acc
         .send_string(&body.to_string())
         .map_err(|e| match e {
             ureq::Error::Status(401 | 403, _) => {
-                anyhow!("{}", tr(lang, "Ely.by rejected the credentials: wrong login or password"))
+                anyhow!(
+                    "{}",
+                    tr(
+                        lang,
+                        "Ely.by rejected the credentials: wrong login or password"
+                    )
+                )
             }
             ureq::Error::Status(code, resp) => {
                 let text = resp.into_string().unwrap_or_default();
@@ -237,7 +243,11 @@ pub fn microsoft_begin(agent: &ureq::Agent, lang: Language) -> Result<(String, S
         .map_err(|e| {
             anyhow!(
                 "{}",
-                tr_fmt(lang, "Microsoft device-code request failed: {0}", &[&e.to_string()])
+                tr_fmt(
+                    lang,
+                    "Microsoft device-code request failed: {0}",
+                    &[&e.to_string()]
+                )
             )
         })?
         .into_json()
@@ -304,10 +314,9 @@ pub fn microsoft_poll(
             access_token,
             refresh_token,
         } => (access_token, refresh_token),
-        TokenResponse::Error { error, .. } => bail!(
-            "{}",
-            tr_fmt(lang, "Microsoft login failed: {0}", &[&error])
-        ),
+        TokenResponse::Error { error, .. } => {
+            bail!("{}", tr_fmt(lang, "Microsoft login failed: {0}", &[&error]))
+        }
     };
     login_with_ms_token(agent, &access_token, refresh_token, lang).map(Some)
 }
@@ -365,7 +374,10 @@ pub fn login_with_ms_token(
                     2148916238 => tr(lang, "the account is a child account"),
                     _ => tr(lang, "Xbox Live authorization failed"),
                 };
-                anyhow!("{}", tr_fmt(lang, "{0} (XErr {1})", &[why, &code.to_string()]))
+                anyhow!(
+                    "{}",
+                    tr_fmt(lang, "{0} (XErr {1})", &[why, &code.to_string()])
+                )
             }
             other => anyhow!(
                 "{}",
@@ -404,11 +416,18 @@ pub fn login_with_ms_token(
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(404, _) => {
-                anyhow!("{}", tr(lang, "this Microsoft account does not own Minecraft (Java)"))
+                anyhow!(
+                    "{}",
+                    tr(lang, "this Microsoft account does not own Minecraft (Java)")
+                )
             }
             other => anyhow!(
                 "{}",
-                tr_fmt(lang, "failed to fetch the Minecraft profile: {0}", &[&other.to_string()])
+                tr_fmt(
+                    lang,
+                    "failed to fetch the Minecraft profile: {0}",
+                    &[&other.to_string()]
+                )
             ),
         })?
         .into_json()
@@ -440,15 +459,24 @@ fn xsts_display_claim(xsts: &XblResponse) -> String {
 pub fn validate_username(name: &str, lang: Language) -> Result<&str> {
     let name = name.trim();
     if name.len() < 3 {
-        return Err(anyhow!("{}", tr(lang, "username must be at least 3 characters")));
+        return Err(anyhow!(
+            "{}",
+            tr(lang, "username must be at least 3 characters")
+        ));
     }
     if name.len() > 16 {
-        return Err(anyhow!("{}", tr(lang, "username cannot be longer than 16 characters")));
+        return Err(anyhow!(
+            "{}",
+            tr(lang, "username cannot be longer than 16 characters")
+        ));
     }
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(anyhow!(
             "{}",
-            tr(lang, "username may only contain letters, digits, and underscores")
+            tr(
+                lang,
+                "username may only contain letters, digits, and underscores"
+            )
         ));
     }
     Ok(name)
@@ -496,9 +524,18 @@ mod tests {
     #[test]
     fn accepts_valid_usernames() {
         use crate::lang::Language;
-        assert_eq!(validate_username("Rizer001", Language::English).unwrap(), "Rizer001");
-        assert_eq!(validate_username("  abc  ", Language::English).unwrap(), "abc");
-        assert_eq!(validate_username("a_b_123", Language::English).unwrap(), "a_b_123");
+        assert_eq!(
+            validate_username("Rizer001", Language::English).unwrap(),
+            "Rizer001"
+        );
+        assert_eq!(
+            validate_username("  abc  ", Language::English).unwrap(),
+            "abc"
+        );
+        assert_eq!(
+            validate_username("a_b_123", Language::English).unwrap(),
+            "a_b_123"
+        );
     }
 
     #[test]

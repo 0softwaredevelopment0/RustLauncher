@@ -165,7 +165,10 @@ impl AccountStore {
     pub fn add_offline(&mut self, name: &str, password: &str, lang: Language) -> Result<String> {
         let name = crate::auth::validate_username(name, lang)?.to_string();
         if password.is_empty() {
-            return Err(anyhow!("{}", tr(lang, "a password is required for an offline account")));
+            return Err(anyhow!(
+                "{}",
+                tr(lang, "a password is required for an offline account")
+            ));
         }
         if self
             .accounts
@@ -344,13 +347,19 @@ mod tests {
         use crate::lang::Language;
         let path = tmp_db("add");
         let mut store = AccountStore::load_from(&path).unwrap();
-        assert!(store.add_offline("Rizer001", "", Language::English).is_err());
+        assert!(store
+            .add_offline("Rizer001", "", Language::English)
+            .is_err());
         assert!(store.add_offline("ab", "pw", Language::English).is_err());
-        let name = store.add_offline("Rizer001", "hunter2", Language::English).unwrap();
+        let name = store
+            .add_offline("Rizer001", "hunter2", Language::English)
+            .unwrap();
         assert_eq!(name, "Rizer001");
         assert!(store.verify_offline_password("Rizer001", "hunter2"));
         assert!(!store.verify_offline_password("Rizer001", "wrong"));
-        assert!(store.add_offline("rizer001", "x", Language::English).is_err()); // dup
+        assert!(store
+            .add_offline("rizer001", "x", Language::English)
+            .is_err()); // dup
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -359,7 +368,9 @@ mod tests {
         use crate::lang::Language;
         let path = tmp_db("rm");
         let mut store = AccountStore::load_from(&path).unwrap();
-        store.add_offline("alpha", "pw1", Language::English).unwrap();
+        store
+            .add_offline("alpha", "pw1", Language::English)
+            .unwrap();
         store.add_offline("beta", "pw2", Language::English).unwrap();
         store.select("beta");
         assert!(!store.verify_offline_password("beta", "nope"));

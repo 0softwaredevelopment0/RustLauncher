@@ -314,6 +314,46 @@ impl Theme {
     }
 }
 
+/// Which Java runtime the launcher uses for games.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum JavaSelection {
+    /// Auto-detect the best runtime for each game (bundled runtime, then the
+    /// system install matching the required version).
+    #[default]
+    Auto,
+    /// A specific installed runtime, picked from the detected list.
+    Installed(String),
+    /// An arbitrary java executable chosen by the user.
+    Custom(String),
+}
+
+impl JavaSelection {
+    /// The configured executable path, if a concrete runtime is selected.
+    /// Blank paths are treated as unset (`None`).
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            JavaSelection::Auto => None,
+            JavaSelection::Installed(p) | JavaSelection::Custom(p) => {
+                let p = p.trim();
+                if p.is_empty() {
+                    None
+                } else {
+                    Some(p)
+                }
+            }
+        }
+    }
+
+    /// True when a concrete runtime is selected but its path is blank.
+    pub fn is_empty_path(&self) -> bool {
+        match self {
+            JavaSelection::Auto => false,
+            JavaSelection::Installed(p) | JavaSelection::Custom(p) => p.trim().is_empty(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -325,11 +365,8 @@ pub struct Settings {
     /// JVM arguments. Heap size lives here (`-Xms`/`-Xmx`); the game refuses
     /// to launch without them. Defaults to [`jvm::DEFAULT_JVM_ARGS`].
     pub java_args: String,
-    /// When false (default) the launcher auto-detects Java; when true,
-    /// `java_path` must point at a java executable.
-    pub use_custom_java: bool,
-    /// Explicit java executable path, used only in the custom mode.
-    pub java_path: String,
+    /// Which Java runtime to launch games with.
+    pub java_mode: JavaSelection,
     /// Game directory. The launcher refuses to launch without it (empty means
     /// "not configured yet").
     pub game_directory: String,
@@ -369,8 +406,7 @@ impl Default for Settings {
             game_height: 480,
             use_custom_resolution: false,
             java_args: jvm::DEFAULT_JVM_ARGS.to_string(),
-            use_custom_java: false,
-            java_path: String::new(),
+            java_mode: JavaSelection::Auto,
             game_directory: String::new(),
             selected_version: String::new(),
             connect_server_ip: String::new(),
@@ -394,33 +430,44 @@ impl Settings {
         const OLD_BROKEN_NEWS_URL: &str = "https://rizer001.opik.net/news";
         let path = home::config_file(home_dir);
         match std::fs::read(&path) {
-            Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
-                Ok(mut settings) => {
-                    // Older builds shipped a wrong default (`…/news`), which
-                    // made the news feed request `…/news/api/news` → HTTP 404.
-                    // Migrate silently to the site root.
-                    if settings.news_url.trim_end_matches('/') == OLD_BROKEN_NEWS_URL {
-                        settings.news_url = Settings::default().news_url;
-                    }
-                    // Pre-theme configs only have the `dark_theme` checkbox:
-                    // map it onto the matching preset (a config that already
-                    // carries a theme keeps it).
-                    if settings.theme == Theme::default() {
-                        if let Some(dark) = settings.dark_theme {
-                            settings.theme = if dark { Theme::dark() } else { Theme::light() };
+            Ok(bytes) => {
+                // Configs from before the Java picker carried a plain
+                // `use_custom_java` flag + `java_path`; map them onto the
+                // enum (a config that already has `java_mode` keeps it).
+                let legacy_java = legacy_java_selection(&bytes);
+                match serde_json::from_slice::<Settings>(&bytes) {
+                    Ok(mut settings) => {
+                        if settings.java_mode == JavaSelection::Auto {
+                            if let Some(mode) = legacy_java {
+                                settings.java_mode = mode;
+                            }
                         }
+                        // Older builds shipped a wrong default (`…/news`), which
+                        // made the news feed request `…/news/api/news` → HTTP 404.
+                        // Migrate silently to the site root.
+                        if settings.news_url.trim_end_matches('/') == OLD_BROKEN_NEWS_URL {
+                            settings.news_url = Settings::default().news_url;
+                        }
+                        // Pre-theme configs only have the `dark_theme` checkbox:
+                        // map it onto the matching preset (a config that already
+                        // carries a theme keeps it).
+                        if settings.theme == Theme::default() {
+                            if let Some(dark) = settings.dark_theme {
+                                settings.theme = if dark { Theme::dark() } else { Theme::light() };
+                            }
+                        }
+                        settings.dark_theme = None;
+                        settings
                     }
-                    settings.dark_theme = None;
-                    settings
+                    Err(e) => {
+                        eprintln!(
+                            "[RustLauncher] corrupt {} ({e}); using defaults",
+                            path.display()
+                        );
+                        Settings::default()
+                    }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "[RustLauncher] corrupt {} ({e}); using defaults",
-                        path.display()
-                    );
-                    Settings::default()
-                }
-            },
+            }
             Err(_) => Settings::default(),
         }
     }
@@ -430,6 +477,29 @@ impl Settings {
         let path = home::config_file(home_dir);
         std::fs::write(path, serde_json::to_string_pretty(self)?)?;
         Ok(())
+    }
+}
+
+/// Extract the pre-enum Java selection from a legacy config: `None` when the
+/// config already carries `java_mode`.
+fn legacy_java_selection(bytes: &[u8]) -> Option<JavaSelection> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    if value.get("java_mode").is_some() {
+        return None;
+    }
+    if value
+        .get("use_custom_java")
+        .and_then(serde_json::Value::as_bool)?
+    {
+        Some(JavaSelection::Custom(
+            value
+                .get("java_path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ))
+    } else {
+        Some(JavaSelection::Auto)
     }
 }
 
@@ -447,7 +517,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let s = Settings::load(&dir);
         assert_eq!(s.java_args, jvm::DEFAULT_JVM_ARGS);
-        assert!(!s.use_custom_java);
+        assert_eq!(s.java_mode, JavaSelection::Auto);
         assert_eq!(s.game_width, 854);
         assert_eq!(s.theme.preset, ThemePreset::Dark);
         assert!(s.theme.dark_base);
@@ -461,8 +531,7 @@ mod tests {
         let s = Settings {
             java_args: "-Xms2g -Xmx8g -XX:+UseZGC".into(),
             username: "Rizer001".into(),
-            use_custom_java: true,
-            java_path: "C:/java/bin/java.exe".into(),
+            java_mode: JavaSelection::Custom("C:/java/bin/java.exe".into()),
             ..Settings::default()
         };
         s.save(&dir).unwrap();
@@ -499,6 +568,52 @@ mod tests {
         assert_eq!(s.console_log_mode, ConsoleMode::All);
         // The per-file modes were merged into a single `file_log`.
         assert_eq!(s.file_log, FileLogMode::All);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_java_config_migrates_to_selection_enum() {
+        let dir = tmp_home("legacy-java");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Pre-enum config: custom Java on.
+        let legacy = serde_json::json!({
+            "java_args": "-Xms1m -Xmx4g",
+            "use_custom_java": true,
+            "java_path": "C:/java/bin/java.exe"
+        });
+        std::fs::write(
+            home::config_file(&dir),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+        let s = Settings::load(&dir);
+        assert_eq!(
+            s.java_mode,
+            JavaSelection::Custom("C:/java/bin/java.exe".into())
+        );
+
+        // Pre-enum config: auto mode.
+        let legacy = serde_json::json!({ "use_custom_java": false });
+        std::fs::write(
+            home::config_file(&dir),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+        let s = Settings::load(&dir);
+        assert_eq!(s.java_mode, JavaSelection::Auto);
+
+        // Modern config keeps its java_mode untouched.
+        let modern = serde_json::json!({ "java_mode": { "installed": "Z:/j/bin/java.exe" } });
+        std::fs::write(
+            home::config_file(&dir),
+            serde_json::to_vec(&modern).unwrap(),
+        )
+        .unwrap();
+        let s = Settings::load(&dir);
+        assert_eq!(
+            s.java_mode,
+            JavaSelection::Installed("Z:/j/bin/java.exe".into())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -543,13 +658,9 @@ mod tests {
 
     #[test]
     fn theme_presets_have_sane_bases() {
-        assert!(Theme::from_preset(ThemePreset::White).dark_base == false);
-        assert!(Theme::from_preset(ThemePreset::Light).dark_base == false);
-        for preset in [
-            ThemePreset::Gray,
-            ThemePreset::Dark,
-            ThemePreset::Black,
-        ] {
+        assert!(!Theme::from_preset(ThemePreset::White).dark_base);
+        assert!(!Theme::from_preset(ThemePreset::Light).dark_base);
+        for preset in [ThemePreset::Gray, ThemePreset::Dark, ThemePreset::Black] {
             assert!(Theme::from_preset(preset).dark_base, "{preset:?}");
         }
         for preset in ThemePreset::ALL {
@@ -582,19 +693,21 @@ mod tests {
     fn theme_roundtrips_through_save_load() {
         let dir = tmp_home("theme");
         let _ = std::fs::remove_dir_all(&dir);
-        let mut s = Settings::default();
-        s.theme = Theme {
-            preset: ThemePreset::Custom,
-            dark_base: true,
-            background: BackgroundMode::Gradient,
-            bg_color: [10, 20, 30],
-            bg_top: [0, 0, 0],
-            bg_bottom: [255, 255, 255],
-            bg_image: "C:/pics/bg.jpg".into(),
-            button: [1, 2, 3],
-            accent: [4, 5, 6],
-            text_color: [7, 8, 9],
-            custom_text: true,
+        let s = Settings {
+            theme: Theme {
+                preset: ThemePreset::Custom,
+                dark_base: true,
+                background: BackgroundMode::Gradient,
+                bg_color: [10, 20, 30],
+                bg_top: [0, 0, 0],
+                bg_bottom: [255, 255, 255],
+                bg_image: "C:/pics/bg.jpg".into(),
+                button: [1, 2, 3],
+                accent: [4, 5, 6],
+                text_color: [7, 8, 9],
+                custom_text: true,
+            },
+            ..Settings::default()
         };
         s.save(&dir).unwrap();
         let loaded = Settings::load(&dir);

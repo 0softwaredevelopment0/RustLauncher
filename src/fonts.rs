@@ -42,10 +42,7 @@ pub fn install(ctx: &egui::Context) {
 
     // Register the fallbacks for both proportional text and the monospace
     // console (mods print CJK to stdout too).
-    for family in [
-        egui::FontFamily::Proportional,
-        egui::FontFamily::Monospace,
-    ] {
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
             .families
             .entry(family)

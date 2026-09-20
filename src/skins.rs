@@ -19,16 +19,28 @@ pub fn download_skin(
 ) -> Result<PathBuf> {
     // 1. UUID from the Mojang profile API (404 = unknown player).
     let profile_url = format!("https://api.mojang.com/users/profiles/minecraft/{username}");
-    let profile_body = net::get_string(agent, &profile_url, lang)
-        .map_err(|e| anyhow!("{}", tr_fmt(lang, "player '{0}' not found ({1})", &[username, &e.to_string()])))?;
+    let profile_body = net::get_string(agent, &profile_url, lang).map_err(|e| {
+        anyhow!(
+            "{}",
+            tr_fmt(
+                lang,
+                "player '{0}' not found ({1})",
+                &[username, &e.to_string()]
+            )
+        )
+    })?;
     let profile: serde_json::Value = serde_json::from_str(&profile_body)
         .with_context(|| tr_fmt(lang, "bad profile response for '{0}'", &[username]))?;
-    let uuid = profile
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            anyhow!("{}", tr_fmt(lang, "profile response for '{0}' has no 'id' field", &[username]))
-        })?;
+    let uuid = profile.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+        anyhow!(
+            "{}",
+            tr_fmt(
+                lang,
+                "profile response for '{0}' has no 'id' field",
+                &[username]
+            )
+        )
+    })?;
 
     // 2. Skin from Crafatar.
     let skin_url = format!("https://crafatar.com/skins/{uuid}");

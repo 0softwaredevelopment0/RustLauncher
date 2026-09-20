@@ -8,6 +8,9 @@ use crate::notifications::{Toast, ToastKind};
 use super::state::CONSOLE_CAP;
 
 /// Draw one toast card; returns `(close_clicked, body_clicked, size)`.
+// A rendering helper naturally takes the toast's whole drawing context;
+// bundling it into a struct would only add indirection.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn toast_body(
     ui: &mut egui::Ui,
     toast: &Toast,

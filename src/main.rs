@@ -19,6 +19,7 @@ mod gui;
 mod home;
 mod icons;
 mod instances;
+mod java_download;
 mod java_locator;
 mod jvm;
 mod lang;

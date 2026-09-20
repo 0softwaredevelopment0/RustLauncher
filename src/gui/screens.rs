@@ -301,7 +301,11 @@ impl App {
 
     pub(crate) fn ui_instances(&mut self, ui: &mut egui::Ui) {
         let lang = self.settings.language;
-        ui.heading(format!("{}  {}", icons::VIDEOGAME_ASSET, tr(lang, "Instances")));
+        ui.heading(format!(
+            "{}  {}",
+            icons::VIDEOGAME_ASSET,
+            tr(lang, "Instances")
+        ));
         ui.add_space(6.0);
 
         // ── Create section ──
@@ -328,7 +332,10 @@ impl App {
                                 .hint_text("C:\\Games\\MyPack")
                                 .desired_width(260.0),
                         );
-                        if ui.button(format!("{} {}", icons::FOLDER, tr(lang, "Browse…"))).clicked() {
+                        if ui
+                            .button(format!("{} {}", icons::FOLDER, tr(lang, "Browse…")))
+                            .clicked()
+                        {
                             if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                                 self.new_instance_dir = dir.to_string_lossy().to_string();
                             }
@@ -337,14 +344,19 @@ impl App {
                     ui.end_row();
                 });
             if ui
-                .button(format!("{}  {}", icons::CHECK_CIRCLE, tr(lang, "Create instance")))
+                .button(format!(
+                    "{}  {}",
+                    icons::CHECK_CIRCLE,
+                    tr(lang, "Create instance")
+                ))
                 .clicked()
             {
                 self.instances_error = None;
-                match self
-                    .instance_store
-                    .create(&self.new_instance_name, &self.new_instance_dir, lang)
-                {
+                match self.instance_store.create(
+                    &self.new_instance_name,
+                    &self.new_instance_dir,
+                    lang,
+                ) {
                     Ok(name) => {
                         if let Err(e) = self.instance_store.save(&self.home_dir, lang) {
                             self.instances_error = Some(format!("{e:#}"));
@@ -420,7 +432,10 @@ impl App {
                         }
 
                         if ui
-                            .add_enabled(alive, egui::Button::new(format!("{} {}", icons::STOP, tr(lang, "Stop"))))
+                            .add_enabled(
+                                alive,
+                                egui::Button::new(format!("{} {}", icons::STOP, tr(lang, "Stop"))),
+                            )
                             .on_disabled_hover_text(tr(lang, "Not running"))
                             .clicked()
                         {
@@ -435,8 +450,12 @@ impl App {
                             .add_enabled(
                                 alive,
                                 egui::Button::new(
-                                    egui::RichText::new(format!("{} {}", icons::KILL, tr(lang, "Kill")))
-                                        .color(egui::Color32::LIGHT_RED),
+                                    egui::RichText::new(format!(
+                                        "{} {}",
+                                        icons::KILL,
+                                        tr(lang, "Kill")
+                                    ))
+                                    .color(egui::Color32::LIGHT_RED),
                                 ),
                             )
                             .on_disabled_hover_text(tr(lang, "Not running"))
@@ -480,7 +499,10 @@ impl App {
         // ── Instance list ──
         if self.instance_store.instances.is_empty() {
             ui.add_space(6.0);
-            ui.weak(tr(lang, "No instances yet — create one above to start playing."));
+            ui.weak(tr(
+                lang,
+                "No instances yet — create one above to start playing.",
+            ));
         }
 
         let names: Vec<String> = self
@@ -680,11 +702,7 @@ impl App {
                                 self.instances_error = Some(format!("{e:#}"));
                                 self.notify_error("INSTANCES", format!("{e:#}"));
                             } else {
-                                self.notify_info(tr_fmt(
-                                    lang,
-                                    "Instance '{0}' deleted",
-                                    &[&name],
-                                ));
+                                self.notify_info(tr_fmt(lang, "Instance '{0}' deleted", &[&name]));
                                 if self.launch_instance == name {
                                     self.launch_instance.clear();
                                 }
@@ -865,7 +883,11 @@ impl App {
             .clone();
         if installing {
             ui.label(&progress);
-            ui.add(egui::ProgressBar::new(1.0).animate(true).text(tr(lang, "working…")));
+            ui.add(
+                egui::ProgressBar::new(1.0)
+                    .animate(true)
+                    .text(tr(lang, "working…")),
+            );
             ui.separator();
         }
         egui::CollapsingHeader::new(tr(lang, "Install a mod loader"))
@@ -1061,10 +1083,7 @@ impl App {
                             tr_fmt(
                                 lang,
                                 "installed {0} ({1} new files)",
-                                &[
-                                    &outcome.version_id,
-                                    &outcome.downloaded_files.to_string()
-                                ]
+                                &[&outcome.version_id, &outcome.downloaded_files.to_string()]
                             )
                         ));
                         app.notify_info(tr_fmt(
@@ -1254,10 +1273,7 @@ impl App {
                             tr_fmt(
                                 lang,
                                 "installed {0} ({1} new files)",
-                                &[
-                                    &outcome.version_id,
-                                    &outcome.downloaded_files.to_string()
-                                ]
+                                &[&outcome.version_id, &outcome.downloaded_files.to_string()]
                             )
                         ));
                     }
@@ -1327,7 +1343,10 @@ impl App {
                 });
             }
             if self.servers.servers.is_empty() {
-                ui.weak(tr(lang, "No servers yet. Add one above or import servers.dat."));
+                ui.weak(tr(
+                    lang,
+                    "No servers yet. Add one above or import servers.dat.",
+                ));
             }
         });
 
@@ -1338,15 +1357,11 @@ impl App {
                 let list = self.servers.servers.clone();
                 match servers::write_servers_dat(&path, &list) {
                     Ok(()) => {
-                        self.servers_dat_status = tr_fmt(
-                            lang,
-                            "written to {0}",
-                            &[&path.display().to_string()],
-                        );
+                        self.servers_dat_status =
+                            tr_fmt(lang, "written to {0}", &[&path.display().to_string()]);
                     }
                     Err(e) => {
-                        self.servers_dat_status =
-                            tr_fmt(lang, "failed: {0}", &[&format!("{e:#}")])
+                        self.servers_dat_status = tr_fmt(lang, "failed: {0}", &[&format!("{e:#}")])
                     }
                 }
             }
@@ -1743,10 +1758,7 @@ impl App {
                                 ));
                             }
                             Some(AccountKind::ElyBy) => {
-                                ui.label(tr(
-                                    lang,
-                                    "Sign in to Ely.by again to confirm removal.",
-                                ));
+                                ui.label(tr(lang, "Sign in to Ely.by again to confirm removal."));
                             }
                             Some(AccountKind::Mojang) => {
                                 ui.label(tr(
@@ -1782,141 +1794,147 @@ impl App {
                             let enter =
                                 resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             enter
-                                && self
-                                    .accounts
-                                    .verify_offline_password(&name, self.account_remove_password.trim())
+                                && self.accounts.verify_offline_password(
+                                    &name,
+                                    self.account_remove_password.trim(),
+                                )
                         });
-                if let Some(err) = &self.account_remove_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, err);
-                }
-                let ok = !self.account_remove_password.trim().is_empty()
-                    && self
-                        .accounts
-                        .verify_offline_password(&name, self.account_remove_password.trim());
-                let mut clicked = false;
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    clicked = ui
-                        .add_enabled(
-                            ok,
-                            egui::Button::new(egui::RichText::new(tr(lang, "Confirm")).strong()),
-                        )
-                        .clicked();
-                });
-                ok && clicked
-            }
-            Some(AccountKind::ElyBy) => {
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang, "Ely.by login:"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.account_remove_login)
-                            .desired_width(220.0),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang, "Password:"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.account_remove_password)
-                            .password(true)
-                            .desired_width(220.0),
-                    );
-                });
-                if let Some(err) = &self.account_remove_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, err);
-                }
-                let ready = !self.account_remove_login.trim().is_empty()
-                    && !self.account_remove_password.is_empty();
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(
-                            ready,
-                            egui::Button::new(egui::RichText::new(tr(lang, "Confirm")).strong()),
-                        )
-                        .clicked()
-                    {
-                        self.account_remove_error = None;
-                        let user = self.account_remove_login.trim().to_string();
-                        let password = self.account_remove_password.clone();
-                        let name = name.clone();
-                        self.spawn_job(
-                            move || auth::login_elyby(&user, &password, lang),
-                            move |app, res| match res {
-                                Ok(acc) => {
-                                    if acc.username == name {
-                                        app.remove_account_confirmed(&name);
-                                    } else {
-                                        let lang = app.settings.language;
-                                        app.account_remove_error = Some(
-                                            tr(
-                                                lang,
-                                                "that login belongs to another account",
-                                            )
-                                            .into(),
-                                        );
-                                    }
-                                }
-                                Err(e) => app.account_remove_error = Some(e.to_string()),
-                            },
-                        );
+                        if let Some(err) = &self.account_remove_error {
+                            ui.colored_label(egui::Color32::LIGHT_RED, err);
+                        }
+                        let ok = !self.account_remove_password.trim().is_empty()
+                            && self.accounts.verify_offline_password(
+                                &name,
+                                self.account_remove_password.trim(),
+                            );
+                        let mut clicked = false;
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            clicked = ui
+                                .add_enabled(
+                                    ok,
+                                    egui::Button::new(
+                                        egui::RichText::new(tr(lang, "Confirm")).strong(),
+                                    ),
+                                )
+                                .clicked();
+                        });
+                        ok && clicked
                     }
-                });
-                false
-            }
-            Some(AccountKind::Mojang) => {
-                ui.label(tr(
+                    Some(AccountKind::ElyBy) => {
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "Ely.by login:"));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.account_remove_login)
+                                    .desired_width(220.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "Password:"));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.account_remove_password)
+                                    .password(true)
+                                    .desired_width(220.0),
+                            );
+                        });
+                        if let Some(err) = &self.account_remove_error {
+                            ui.colored_label(egui::Color32::LIGHT_RED, err);
+                        }
+                        let ready = !self.account_remove_login.trim().is_empty()
+                            && !self.account_remove_password.is_empty();
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(
+                                    ready,
+                                    egui::Button::new(
+                                        egui::RichText::new(tr(lang, "Confirm")).strong(),
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                self.account_remove_error = None;
+                                let user = self.account_remove_login.trim().to_string();
+                                let password = self.account_remove_password.clone();
+                                let name = name.clone();
+                                self.spawn_job(
+                                    move || auth::login_elyby(&user, &password, lang),
+                                    move |app, res| match res {
+                                        Ok(acc) => {
+                                            if acc.username == name {
+                                                app.remove_account_confirmed(&name);
+                                            } else {
+                                                let lang = app.settings.language;
+                                                app.account_remove_error = Some(
+                                                    tr(
+                                                        lang,
+                                                        "that login belongs to another account",
+                                                    )
+                                                    .into(),
+                                                );
+                                            }
+                                        }
+                                        Err(e) => app.account_remove_error = Some(e.to_string()),
+                                    },
+                                );
+                            }
+                        });
+                        false
+                    }
+                    Some(AccountKind::Mojang) => {
+                        ui.label(tr(
                     lang,
                     "A Microsoft sign-in window will open. Complete it to remove this account.",
                 ));
-                if ui.button(tr(lang, "Start Microsoft sign-in")).clicked() {
-                    let name = name.clone();
-                    self.account_busy = true;
-                    self.spawn_job(
-                        move || {
-                            auth::microsoft_begin(&crate::net::agent(), lang)
-                                .map_err(|e| e.to_string())
-                        },
-                        move |app, result| match result {
-                            Ok((device_code, user_code, _, _)) => {
-                                app.account_busy = false;
-                                app.account_remove_pending = Some(name.clone());
-                                app.ms_removal = Some(MsLoginState {
-                                    device_code,
-                                    user_code: user_code.clone(),
-                                    error: None,
-                                    cancelled: false,
-                                });
-                                let lang = app.settings.language;
-                                app.notify_info(tr_fmt(
-                                    lang,
-                                    "Enter the code {0} at microsoft.com/link",
-                                    &[&user_code],
-                                ));
-                            }
-                            Err(e) => {
-                                app.account_busy = false;
-                                app.account_remove_error = Some(e);
-                            }
-                        },
-                    );
+                        if ui.button(tr(lang, "Start Microsoft sign-in")).clicked() {
+                            let name = name.clone();
+                            self.account_busy = true;
+                            self.spawn_job(
+                                move || {
+                                    auth::microsoft_begin(&crate::net::agent(), lang)
+                                        .map_err(|e| e.to_string())
+                                },
+                                move |app, result| match result {
+                                    Ok((device_code, user_code, _, _)) => {
+                                        app.account_busy = false;
+                                        app.account_remove_pending = Some(name.clone());
+                                        app.ms_removal = Some(MsLoginState {
+                                            device_code,
+                                            user_code: user_code.clone(),
+                                            error: None,
+                                            cancelled: false,
+                                        });
+                                        let lang = app.settings.language;
+                                        app.notify_info(tr_fmt(
+                                            lang,
+                                            "Enter the code {0} at microsoft.com/link",
+                                            &[&user_code],
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        app.account_busy = false;
+                                        app.account_remove_error = Some(e);
+                                    }
+                                },
+                            );
+                        }
+                        if let Some(err) = &self.account_remove_error {
+                            ui.colored_label(egui::Color32::LIGHT_RED, err);
+                        }
+                        false
+                    }
+                    None => false,
+                };
+                if confirmed {
+                    self.remove_account_confirmed(&name);
                 }
-                if let Some(err) = &self.account_remove_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, err);
-                }
-                false
-            }
-            None => false,
-        };
-        if confirmed {
-            self.remove_account_confirmed(&name);
-        }
 
-        ui.add_space(10.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(tr(lang, "Cancel")).clicked() {
-                self.account_remove_pending = None;
-                self.ms_removal = None;
-            }
-        });
-    });
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tr(lang, "Cancel")).clicked() {
+                        self.account_remove_pending = None;
+                        self.ms_removal = None;
+                    }
+                });
+            });
 
         // The Microsoft re-login for removal shares the device-code poller.
         if self.ms_removal.is_some() && !self.account_busy && !self.ms_polling {
@@ -1942,8 +1960,10 @@ impl App {
                             } else {
                                 if let Some(state) = &mut app.ms_removal {
                                     let lang = app.settings.language;
-                                    state.error =
-                                        Some(tr(lang, "that Microsoft account is not this account").into());
+                                    state.error = Some(
+                                        tr(lang, "that Microsoft account is not this account")
+                                            .into(),
+                                    );
                                 }
                             }
                         }
@@ -2002,11 +2022,8 @@ impl App {
                     |app, result| match result {
                         Ok(path) => {
                             let lang = app.settings.language;
-                            app.skin_status = tr_fmt(
-                                lang,
-                                "saved {0}",
-                                &[&path.display().to_string()],
-                            );
+                            app.skin_status =
+                                tr_fmt(lang, "saved {0}", &[&path.display().to_string()]);
                             app.refresh_skins();
                             app.selected_skin = Some(name2);
                         }

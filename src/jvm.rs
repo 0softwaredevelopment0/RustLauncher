@@ -106,9 +106,11 @@ pub fn validate_jvm_args(args: &[String], lang: crate::lang::Language) -> Result
         (true, true) => Ok(()),
         (false, true) => Err(tr(lang, "JVM flags are missing -Xms (initial heap).").to_string()),
         (true, false) => Err(tr(lang, "JVM flags are missing -Xmx (maximum heap).").to_string()),
-        (false, false) => Err(
-            tr(lang, "JVM flags are missing both -Xms and -Xmx (heap size).").to_string(),
-        ),
+        (false, false) => Err(tr(
+            lang,
+            "JVM flags are missing both -Xms and -Xmx (heap size).",
+        )
+        .to_string()),
     }
 }
 

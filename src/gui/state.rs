@@ -1,7 +1,7 @@
 //! GUI state: the `App` struct, shared type aliases, screens, running-game
 //! registry items, content-tab state and the merged version-list model.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -177,9 +177,7 @@ impl VersionSort {
         use crate::lang::{tr, tr_fmt};
         match self {
             VersionSort::Newest => tr(lang, "Newest").to_string(),
-            VersionSort::Number => {
-                tr_fmt(lang, "Number {0}", &[icons::ARROW_DOWNWARD])
-            }
+            VersionSort::Number => tr_fmt(lang, "Number {0}", &[icons::ARROW_DOWNWARD]),
             VersionSort::ReleaseDate => tr(lang, "Release date").to_string(),
             VersionSort::LoaderType => tr(lang, "Loader type").to_string(),
             VersionSort::Alphabetical => tr_fmt(lang, "A {0} Z", &[icons::ARROW_FORWARD]),
@@ -428,9 +426,13 @@ impl IconCache {
 }
 
 /// Download and decode an icon into raw RGBA + dimensions.
-pub(crate) fn fetch_icon_rgba(url: &str, lang: crate::lang::Language) -> Result<(Vec<u8>, u32, u32)> {
+pub(crate) fn fetch_icon_rgba(
+    url: &str,
+    lang: crate::lang::Language,
+) -> Result<(Vec<u8>, u32, u32)> {
     let bytes = crate::net::get_bytes(&crate::net::agent(), url, lang)?;
-    let img = image::load_from_memory(&bytes).context(crate::lang::tr(lang, "failed to decode the icon image"))?;
+    let img = image::load_from_memory(&bytes)
+        .context(crate::lang::tr(lang, "failed to decode the icon image"))?;
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width(), rgba.height());
     Ok((rgba.into_raw(), w, h))
@@ -551,6 +553,28 @@ pub struct App {
     pub news: Option<Result<Vec<NewsItem>, String>>,
     /// Index of the expanded news detail view; `None` = card grid.
     pub news_selected: Option<usize>,
+
+    // Java picker (Settings tab).
+    /// Cached inventory of installed runtimes (filled by the first scan).
+    pub(crate) java_installed: Vec<crate::java_locator::InstalledJava>,
+    pub(crate) java_scan_loading: bool,
+    /// Whether the first inventory scan already ran.
+    pub(crate) java_scanned: bool,
+    /// Cached sub-version lists per (edition id, major).
+    pub(crate) java_versions:
+        BTreeMap<(String, u32), Result<Vec<crate::java_download::SubVersion>, String>>,
+    /// Which (edition, major) lists are currently being fetched.
+    pub(crate) java_versions_loading: BTreeSet<(String, u32)>,
+    /// Edition id chosen in the download section.
+    pub java_dl_edition: String,
+    /// Major version chosen in the download section.
+    pub java_dl_major: u32,
+    /// Sub-version id chosen in the download section.
+    pub java_dl_sub: Option<String>,
+    /// A runtime download in flight: (edition id, major, sub label).
+    pub(crate) java_downloading: Option<(String, u32, String)>,
+    /// Whether the Download Java section is expanded.
+    pub java_download_open: bool,
 
     // Diagnostics.
     pub diag_results: Option<Vec<diagnostics::CheckResult>>,

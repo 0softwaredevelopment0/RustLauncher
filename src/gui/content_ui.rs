@@ -544,7 +544,11 @@ impl App {
                     ui.separator();
                     // Release/Beta/Alpha chips.
                     for (label, value, color) in [
-                        (tr(lang, "Release"), "release", egui::Color32::from_rgb(0, 200, 0)),
+                        (
+                            tr(lang, "Release"),
+                            "release",
+                            egui::Color32::from_rgb(0, 200, 0),
+                        ),
                         (tr(lang, "Beta"), "beta", egui::Color32::YELLOW),
                         (tr(lang, "Alpha"), "alpha", egui::Color32::LIGHT_RED),
                     ] {
@@ -608,7 +612,11 @@ impl App {
                                 ui.weak(format!("{:.1} MB", file.size as f32 / 1_048_576.0));
                             });
                         });
-                        let label = if installing { "..." } else { tr(lang, "Download") };
+                        let label = if installing {
+                            "..."
+                        } else {
+                            tr(lang, "Download")
+                        };
                         if ui
                             .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.add_enabled(!installing, egui::Button::new(label))
@@ -648,7 +656,8 @@ impl App {
         *self
             .content_progress
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = tr_fmt(lang, "downloading {0}…", &[&file.file_name]);
+            .unwrap_or_else(|e| e.into_inner()) =
+            tr_fmt(lang, "downloading {0}…", &[&file.file_name]);
         let game_dir = self.active_game_dir();
         // Data packs, shaders, plugins and server jars land in the user's
         // Downloads folder; mods and resource packs go into the game dir.

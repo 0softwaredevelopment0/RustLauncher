@@ -96,7 +96,9 @@ mod tests {
     fn create_get_delete_lifecycle() {
         use crate::lang::Language;
         let mut store = InstanceStore::default();
-        let name = store.create("My Pack", "C:/Games/MyPack", Language::English).unwrap();
+        let name = store
+            .create("My Pack", "C:/Games/MyPack", Language::English)
+            .unwrap();
         assert_eq!(name, "My Pack");
         assert_eq!(
             store.get("My Pack").map(|i| i.game_dir.as_str()),
@@ -104,7 +106,9 @@ mod tests {
         );
 
         // Duplicate names get a numbered suffix.
-        let dup = store.create("My Pack", "C:/Games/Other", Language::English).unwrap();
+        let dup = store
+            .create("My Pack", "C:/Games/Other", Language::English)
+            .unwrap();
         assert_eq!(dup, "My Pack (1)");
 
         assert!(store.delete("My Pack"));

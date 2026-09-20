@@ -39,6 +39,10 @@ pub const FAVORITE: &str = "\u{e87d}"; // favorite (heart)
 pub const CHECK: &str = "\u{e5ca}"; // check
 pub const RESTORE: &str = "\u{e8b3}"; // restore (settings_backup_restore)
 pub const FIBER_MANUAL_RECORD: &str = "\u{e061}"; // fiber_manual_record (status dot)
+pub const FILE_DOWNLOAD: &str = "\u{e2c4}"; // file_download
+pub const REFRESH: &str = "\u{e5d5}"; // refresh
+pub const EXPAND_MORE: &str = "\u{e313}"; // expand_more
+pub const EXPAND_LESS: &str = "\u{e316}"; // expand_less
 
 /// All icon constants, used by tests.
 #[cfg(test)]
@@ -69,6 +73,10 @@ pub const ALL_ICONS: &[&str] = &[
     CHECK,
     RESTORE,
     FIBER_MANUAL_RECORD,
+    FILE_DOWNLOAD,
+    REFRESH,
+    EXPAND_MORE,
+    EXPAND_LESS,
 ];
 
 #[cfg(test)]

@@ -115,7 +115,10 @@ mod tests {
         assert_eq!(tr(Language::English, "Save settings"), "Save settings");
         // Unknown keys fall back to English in every language.
         for lang in Language::ALL {
-            assert_eq!(tr(lang, "some key that does not exist"), "some key that does not exist");
+            assert_eq!(
+                tr(lang, "some key that does not exist"),
+                "some key that does not exist"
+            );
         }
     }
 
@@ -123,7 +126,11 @@ mod tests {
     fn templates_substitute_in_order() {
         let s = tr_fmt(Language::English, "Stop {0}?", &["Survival"]);
         assert_eq!(s, "Stop Survival?");
-        let s = tr_fmt(Language::English, "Install {0} {1} on {2}", &["Fabric", "0.16", "1.21"]);
+        let s = tr_fmt(
+            Language::English,
+            "Install {0} {1} on {2}",
+            &["Fabric", "0.16", "1.21"],
+        );
         assert_eq!(s, "Install Fabric 0.16 on 1.21");
     }
 
@@ -151,7 +158,10 @@ mod tests {
             for key in keys {
                 let t = tr(lang, key);
                 assert_ne!(t, key, "{lang:?} did not translate {key:?}");
-                assert!(!t.is_empty(), "{lang:?} has an empty translation for {key:?}");
+                assert!(
+                    !t.is_empty(),
+                    "{lang:?} has an empty translation for {key:?}"
+                );
             }
         }
     }
