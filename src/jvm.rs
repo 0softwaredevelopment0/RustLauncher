@@ -66,10 +66,23 @@ pub const PRESETS: &[JvmPreset] = &[
     },
 ];
 
+/// The pseudo-id of the free-form mode: flags edited by hand (or pinned to
+/// manual by the user) that match no preset.
+pub const CUSTOM_PRESET_ID: &str = "custom";
+
 /// Look up a preset by id.
-#[allow(dead_code)] // part of the preset API (GUI matches by id later)
 pub fn find_preset(id: &str) -> Option<&'static JvmPreset> {
     PRESETS.iter().find(|p| p.id == id)
+}
+
+/// The id of the preset whose args match exactly, or [`CUSTOM_PRESET_ID`]
+/// when the flag set matches no built-in preset.
+pub fn preset_id_for_args(args: &str) -> &'static str {
+    PRESETS
+        .iter()
+        .find(|p| p.args == args)
+        .map(|p| p.id)
+        .unwrap_or(CUSTOM_PRESET_ID)
 }
 
 /// Is this flag a heap-size flag (`-Xms…` / `-Xmx…`, any case, any unit)?
@@ -158,6 +171,19 @@ mod tests {
             .unwrap()
             .args
             .contains("+UseParallelGC"));
+    }
+
+    #[test]
+    fn preset_ids_resolve_from_args() {
+        for preset in PRESETS {
+            assert_eq!(preset_id_for_args(preset.args), preset.id);
+        }
+        assert_eq!(
+            preset_id_for_args("-Xms1m -Xmx4g -XX:+UseZGC -Dfoo=bar"),
+            CUSTOM_PRESET_ID
+        );
+        // The custom mode is a pseudo-id: no preset carries it.
+        assert_eq!(find_preset(CUSTOM_PRESET_ID), None);
     }
 
     #[test]

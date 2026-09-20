@@ -92,6 +92,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "Create instance" => "Создать сборку",
         "current" => "текущая",
         "Custom" => "Своя",
+        "Custom flags" => "Свои флаги",
         "Custom Java is selected but the Java path is empty. Pick a java executable in Settings or switch back to Default." => "Выбрана своя Java, но путь к Java пуст. Укажите исполняемый файл java в настройках или вернитесь к «По умолчанию».",
         "Custom path" => "Свой путь",
         "Custom resolution" => "Своё разрешение",

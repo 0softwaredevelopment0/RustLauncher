@@ -289,25 +289,61 @@ impl App {
             }
             ui.add_space(4.0);
 
-            // JVM flags: presets + free edit; heap flags are mandatory.
+            // JVM flags: one preset picker + free edit; heap flags are
+            // mandatory. Manual edits drop the mode to Custom automatically.
             ui.strong(tr(lang, "JVM flags"));
-            ui.horizontal(|ui| {
-                for preset in crate::jvm::PRESETS {
-                    let selected = self.settings.java_args == preset.args;
+            let active = crate::jvm::find_preset(&self.settings.java_args_preset);
+            let selected_text = active
+                .map(|p| p.label.to_string())
+                .unwrap_or_else(|| tr(lang, "Custom flags").to_string());
+            egui::ComboBox::from_id_salt("jvm_flag_preset")
+                .selected_text(selected_text)
+                .show_ui(ui, |ui| {
+                    for preset in crate::jvm::PRESETS {
+                        let is_active = active.map(|p| p.id) == Some(preset.id);
+                        if ui
+                            .add_enabled(
+                                !is_active,
+                                egui::SelectableLabel::new(is_active, preset.label.to_string()),
+                            )
+                            .clicked()
+                        {
+                            self.settings.java_args = preset.args.to_string();
+                            self.settings.java_args_preset = preset.id.to_string();
+                        }
+                    }
+                    let is_custom = self.settings.java_args_preset == crate::jvm::CUSTOM_PRESET_ID;
                     if ui
-                        .add_enabled(!selected, egui::Button::new(preset.label))
+                        .add_enabled(
+                            !is_custom,
+                            egui::SelectableLabel::new(
+                                is_custom,
+                                tr(lang, "Custom flags").to_string(),
+                            ),
+                        )
                         .clicked()
                     {
-                        self.settings.java_args = preset.args.to_string();
+                        // Pinned by hand: stays Custom until another preset
+                        // is picked, even if the text matches one exactly.
+                        self.settings.java_args_preset = crate::jvm::CUSTOM_PRESET_ID.to_string();
                     }
-                }
-            });
-            ui.add(
+                });
+            let flags_edit = ui.add(
                 egui::TextEdit::multiline(&mut self.settings.java_args)
                     .desired_rows(3)
                     .desired_width(f32::INFINITY)
                     .font(egui::TextStyle::Monospace),
             );
+            // Editing the text by hand leaves the preset mode: switch to
+            // Custom unless the text still matches the active preset exactly.
+            if flags_edit.changed()
+                && self.settings.java_args_preset != crate::jvm::CUSTOM_PRESET_ID
+                && active
+                    .map(|p| p.args != self.settings.java_args)
+                    .unwrap_or(true)
+            {
+                self.settings.java_args_preset = crate::jvm::CUSTOM_PRESET_ID.to_string();
+            }
             {
                 let flags: Vec<String> = self
                     .settings

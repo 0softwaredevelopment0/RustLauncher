@@ -365,6 +365,10 @@ pub struct Settings {
     /// JVM arguments. Heap size lives here (`-Xms`/`-Xmx`); the game refuses
     /// to launch without them. Defaults to [`jvm::DEFAULT_JVM_ARGS`].
     pub java_args: String,
+    /// Which JVM flag preset is active: a [`jvm::PRESETS`] id, or
+    /// [`jvm::CUSTOM_PRESET_ID`] when the flags were edited by hand or the
+    /// user pinned the manual mode in the picker.
+    pub java_args_preset: String,
     /// Which Java runtime to launch games with.
     pub java_mode: JavaSelection,
     /// Game directory. The launcher refuses to launch without it (empty means
@@ -406,6 +410,7 @@ impl Default for Settings {
             game_height: 480,
             use_custom_resolution: false,
             java_args: jvm::DEFAULT_JVM_ARGS.to_string(),
+            java_args_preset: jvm::preset_id_for_args(jvm::DEFAULT_JVM_ARGS).to_string(),
             java_mode: JavaSelection::Auto,
             game_directory: String::new(),
             selected_version: String::new(),
@@ -457,6 +462,13 @@ impl Settings {
                             }
                         }
                         settings.dark_theme = None;
+                        // Flags edited outside the picker no longer match the
+                        // stored preset: re-derive it from the args (a pinned
+                        // `custom` stays untouched).
+                        if settings.java_args_preset != jvm::CUSTOM_PRESET_ID {
+                            settings.java_args_preset =
+                                jvm::preset_id_for_args(&settings.java_args).to_string();
+                        }
                         settings
                     }
                     Err(e) => {
@@ -512,6 +524,34 @@ mod tests {
     }
 
     #[test]
+    fn java_args_preset_roundtrips_and_self_heals() {
+        let dir = tmp_home("jvm-preset");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Default: the default args equal the minimal preset.
+        let mut s = Settings::default();
+        assert_eq!(s.java_args_preset, "minimal");
+
+        // Picking the G1GC preset survives a save/load.
+        s.java_args = jvm::find_preset("g1gc").unwrap().args.to_string();
+        s.java_args_preset = "g1gc".into();
+        s.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).java_args_preset, "g1gc");
+
+        // Args edited outside the picker → derived back to custom.
+        s.java_args = "-Xms2g -Xmx6g -Dextra".into();
+        s.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).java_args_preset, jvm::CUSTOM_PRESET_ID);
+
+        // A pinned custom is never overwritten on load.
+        s.java_args_preset = jvm::CUSTOM_PRESET_ID.into();
+        s.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).java_args_preset, jvm::CUSTOM_PRESET_ID);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn missing_file_gives_defaults() {
         let dir = tmp_home("missing");
         let _ = std::fs::remove_dir_all(&dir);
@@ -530,6 +570,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let s = Settings {
             java_args: "-Xms2g -Xmx8g -XX:+UseZGC".into(),
+            java_args_preset: jvm::CUSTOM_PRESET_ID.into(),
             username: "Rizer001".into(),
             java_mode: JavaSelection::Custom("C:/java/bin/java.exe".into()),
             ..Settings::default()
