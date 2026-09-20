@@ -18,6 +18,7 @@ pub const PLAY_ARROW: &str = "\u{e037}"; // play_arrow
 pub const TERMINAL: &str = "\u{eb8e}"; // terminal
 pub const LAYERS: &str = "\u{e53b}"; // layers
 pub const DNS: &str = "\u{e875}"; // dns
+pub const CONTENT_COPY: &str = "\u{e14c}"; // content_copy
 pub const ACCOUNT_CIRCLE: &str = "\u{e853}"; // account_circle
 pub const FACE: &str = "\u{e87c}"; // face
 pub const EXTENSION: &str = "\u{e87b}"; // extension
@@ -65,6 +66,7 @@ pub const ALL_ICONS: &[&str] = &[
     KILL,
     FOLDER,
     CHECK_CIRCLE,
+    CONTENT_COPY,
     CHEVRON_RIGHT,
     ARROW_UPWARD,
     ARROW_DOWNWARD,

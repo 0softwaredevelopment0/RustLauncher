@@ -224,7 +224,7 @@ pub fn parse_java_full_version(output: &str) -> Option<String> {
 }
 
 /// Probe a java executable; `None` when the binary does not answer.
-fn probe(java_exe: &Path) -> Option<(u32, String)> {
+pub fn probe(java_exe: &Path) -> Option<(u32, String)> {
     let output = Command::new(java_exe).arg("-version").output().ok()?;
     let text = String::from_utf8_lossy(&output.stderr).to_string();
     let text = if text.trim().is_empty() {

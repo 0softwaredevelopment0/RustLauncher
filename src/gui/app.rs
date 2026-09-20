@@ -694,8 +694,14 @@ impl App {
             {
                 self.diag_running = true;
                 let lang = self.settings.language;
+                let input = diagnostics::DiagInput {
+                    game_directory: self.settings.game_directory.clone(),
+                    news_url: self.settings.news_url.clone(),
+                    java_path: self.settings.java_mode.path().map(str::to_string),
+                    home_dir: Some(self.home_dir.clone()),
+                };
                 self.spawn_job(
-                    move || diagnostics::run_all(&crate::net::agent(), lang),
+                    move || diagnostics::run_all(&crate::net::agent(), lang, &input),
                     |app, results| {
                         app.diag_results = Some(results);
                         app.diag_running = false;
@@ -711,10 +717,39 @@ impl App {
             None => {
                 ui.weak(tr(
                     lang,
-                    "Press Run tests to check DNS, HTTP and TCP connectivity.",
+                    "Press Run tests to check system, Java, DNS, HTTP and TCP connectivity.",
                 ));
             }
             Some(results) => {
+                let passed = results.iter().filter(|r| r.ok).count();
+                let all_ok = passed == results.len();
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        if all_ok {
+                            egui::Color32::LIGHT_GREEN
+                        } else {
+                            egui::Color32::LIGHT_RED
+                        },
+                        tr_fmt(
+                            lang,
+                            "{0}/{1} passed",
+                            &[&passed.to_string(), &results.len().to_string()],
+                        ),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(format!(
+                                "{} {}",
+                                icons::CONTENT_COPY,
+                                tr(lang, "Copy report")
+                            ))
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(diagnostics::report_text(results));
+                        }
+                    });
+                });
+                ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for result in results {
                         ui.horizontal(|ui| {
