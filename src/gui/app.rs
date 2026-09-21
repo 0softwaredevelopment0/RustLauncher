@@ -771,10 +771,10 @@ impl App {
                 "Press Run tests to check system, Java, DNS, HTTP and TCP connectivity.",
             ));
         } else {
-            let results = &self.diag_results;
-            let passed = results.iter().filter(|r| r.ok).count();
-            let all_ok = passed == results.len();
+            let passed = self.diag_results.iter().filter(|r| r.ok).count();
+            let all_ok = passed == self.diag_results.len();
             let finished = self.diag_pending.is_empty();
+            let mut save_clicked = false;
             ui.horizontal(|ui| {
                 ui.colored_label(
                     if all_ok {
@@ -785,33 +785,46 @@ impl App {
                     tr_fmt(
                         lang,
                         "{0}/{1} passed",
-                        &[&passed.to_string(), &results.len().to_string()],
+                        &[&passed.to_string(), &self.diag_results.len().to_string()],
                     ),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Copy is only offered once every planned check has
-                    // finished, so the report is never partial.
-                    let copy = ui.add_enabled(
+                    // Copy / save are only offered once every planned check
+                    // has finished, so the report is never partial.
+                    let save = ui.add_enabled(
                         finished,
                         egui::Button::new(format!(
                             "{} {}",
-                            icons::CONTENT_COPY,
-                            tr(lang, "Copy report")
+                            icons::FILE_DOWNLOAD,
+                            tr(lang, "Save to file")
                         )),
                     );
+                    if save.clicked() {
+                        ui.ctx().request_repaint();
+                        save_clicked = true;
+                    }
+                    let copy = ui.add_enabled(
+                        finished,
+                        egui::Button::new(format!("{} {}", icons::SAVE, tr(lang, "Copy report"))),
+                    );
                     if copy.clicked() {
-                        ui.ctx().copy_text(diagnostics::report_text(results));
+                        ui.ctx()
+                            .copy_text(diagnostics::report_text(&self.diag_results));
                     }
                     if !finished {
                         copy.on_disabled_hover_text(tr(lang, "Waiting for all tests to finish…"));
+                        save.on_disabled_hover_text(tr(lang, "Waiting for all tests to finish…"));
                     }
                 });
             });
+            if save_clicked {
+                self.export_diagnostics();
+            }
             ui.separator();
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    for result in results {
+                    for result in &self.diag_results {
                         ui.horizontal(|ui| {
                             let color = if result.ok {
                                 egui::Color32::LIGHT_GREEN

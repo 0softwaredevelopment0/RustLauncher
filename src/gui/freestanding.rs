@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result};
 
 use crate::accounts::AccountStore;
 use crate::auth::{self, AccountKind};
+use crate::diagnostics;
 use crate::fonts;
 use crate::home;
 use crate::instances;
@@ -307,6 +308,44 @@ impl App {
                 self.notify_error(
                     "EXPORT",
                     tr_fmt(lang, "console export failed: {0}", &[&format!("{e:#}")]),
+                );
+            }
+        }
+    }
+
+    /// Ask for a destination and write the finished diagnostics report
+    /// there (the Save to file button on the Diagnostics tab).
+    pub(crate) fn export_diagnostics(&mut self) {
+        if !self.diag_pending.is_empty() {
+            return; // not finished yet — the button is disabled anyway
+        }
+        let lang = self.settings.language;
+        let default_name = format!(
+            "diagnostics-{}.txt",
+            chrono::Local::now().format("%Y%m%d_%H%M%S")
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter(tr(lang, "Text files"), &["txt", "log"])
+            .save_file()
+        else {
+            return; // user cancelled
+        };
+        let text = diagnostics::report_text(&self.diag_results);
+        match std::fs::write(&path, text) {
+            Ok(()) => {
+                let msg = tr_fmt(
+                    lang,
+                    "Diagnostics report saved to {0}",
+                    &[&path.display().to_string()],
+                );
+                self.log_console(msg.clone());
+                self.notify_info(msg);
+            }
+            Err(e) => {
+                self.notify_error(
+                    "DIAG-EXPORT",
+                    tr_fmt(lang, "diagnostics export failed: {0}", &[&format!("{e:#}")]),
                 );
             }
         }
