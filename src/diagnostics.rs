@@ -277,28 +277,64 @@ pub fn tcp_check(address: &str, timeout: Duration, lang: Language) -> CheckResul
     }
 }
 
-/// Run the full suite in order.
-pub fn run_all(agent: &ureq::Agent, lang: Language, input: &DiagInput) -> Vec<CheckResult> {
-    let mut results = vec![
-        platform_check(lang),
-        game_dir_check(&input.game_directory, lang),
-        runtimes_check(input.home_dir.as_deref(), lang),
-        selected_java_check(input.java_path.as_deref(), lang),
-    ];
+/// A single diagnostic check that can be run independently: its display
+/// name (shown as a pending row until it finishes) and the task itself.
+pub struct DiagTask {
+    pub name: String,
+    pub run: Box<dyn FnOnce() -> CheckResult + Send>,
+}
+
+/// Build the ordered list of checks without running them; the caller spawns
+/// each task in the background so results stream in one by one.
+pub fn suite(agent: ureq::Agent, lang: Language, input: DiagInput) -> Vec<DiagTask> {
+    let mut tasks: Vec<DiagTask> = Vec::new();
+    tasks.push(DiagTask {
+        name: tr(lang, "Platform").into(),
+        run: Box::new(move || platform_check(lang)),
+    });
+    let dir = input.game_directory.clone();
+    tasks.push(DiagTask {
+        name: tr(lang, "Game directory").into(),
+        run: Box::new(move || game_dir_check(&dir, lang)),
+    });
+    let home = input.home_dir.clone();
+    tasks.push(DiagTask {
+        name: tr(lang, "Detected Java runtimes").into(),
+        run: Box::new(move || runtimes_check(home.as_deref(), lang)),
+    });
+    let java = input.java_path.clone();
+    tasks.push(DiagTask {
+        name: tr(lang, "Selected Java").into(),
+        run: Box::new(move || selected_java_check(java.as_deref(), lang)),
+    });
     for host in DNS_HOSTS {
-        results.push(dns_check(host, lang));
+        tasks.push(DiagTask {
+            name: format!("DNS {host}"),
+            run: Box::new(move || dns_check(host, lang)),
+        });
     }
     for url in TEST_URLS {
-        results.push(http_check(agent, url, lang));
+        let agent = agent.clone();
+        tasks.push(DiagTask {
+            name: format!("HTTP {url}"),
+            run: Box::new(move || http_check(&agent, url, lang)),
+        });
     }
-    let news = input.news_url.trim().trim_end_matches('/');
+    let news = input.news_url.trim().trim_end_matches('/').to_string();
     if !news.is_empty() {
-        results.push(http_check(agent, &format!("{news}/api/news"), lang));
+        let url = format!("{news}/api/news");
+        tasks.push(DiagTask {
+            name: format!("HTTP {url}"),
+            run: Box::new(move || http_check(&agent, &url, lang)),
+        });
     }
     for server in TEST_SERVERS {
-        results.push(tcp_check(server, Duration::from_secs(3), lang));
+        tasks.push(DiagTask {
+            name: format!("TCP {server}"),
+            run: Box::new(move || tcp_check(server, Duration::from_secs(3), lang)),
+        });
     }
-    results
+    tasks
 }
 
 /// Plain-text report for the clipboard (the Copy report button).

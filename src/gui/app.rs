@@ -736,57 +736,76 @@ impl App {
                     java_path: self.settings.java_mode.path().map(str::to_string),
                     home_dir: Some(self.home_dir.clone()),
                 };
-                self.spawn_job(
-                    move || diagnostics::run_all(&crate::net::agent(), lang, &input),
-                    |app, results| {
-                        app.diag_results = Some(results);
-                        app.diag_running = false;
-                    },
-                );
+                // Stream results: every check runs in its own background
+                // thread and appends its row to the list as soon as it
+                // finishes, so the user sees progress line by line.
+                let tasks = diagnostics::suite(crate::net::agent(), lang, input);
+                self.diag_results.clear();
+                self.diag_pending = tasks.iter().map(|t| t.name.clone()).collect();
+                for task in tasks {
+                    let name = task.name.clone();
+                    self.spawn_job(
+                        move || (task.run)(),
+                        move |app, result: diagnostics::CheckResult| {
+                            app.diag_results.push(result);
+                            if let Some(pos) = app.diag_pending.iter().position(|n| *n == name) {
+                                app.diag_pending.remove(pos);
+                            }
+                        },
+                    );
+                }
             }
             if self.diag_running {
                 ui.label(tr(lang, "Testing…"));
             }
         });
         ui.separator();
-        match &self.diag_results {
-            None => {
-                ui.weak(tr(
-                    lang,
-                    "Press Run tests to check system, Java, DNS, HTTP and TCP connectivity.",
-                ));
-            }
-            Some(results) => {
-                let passed = results.iter().filter(|r| r.ok).count();
-                let all_ok = passed == results.len();
-                ui.horizontal(|ui| {
-                    ui.colored_label(
-                        if all_ok {
-                            egui::Color32::LIGHT_GREEN
-                        } else {
-                            egui::Color32::LIGHT_RED
-                        },
-                        tr_fmt(
-                            lang,
-                            "{0}/{1} passed",
-                            &[&passed.to_string(), &results.len().to_string()],
-                        ),
+        if self.diag_results.is_empty() && self.diag_pending.is_empty() && !self.diag_running {
+            ui.weak(tr(
+                lang,
+                "Press Run tests to check system, Java, DNS, HTTP and TCP connectivity.",
+            ));
+        } else {
+            let results = &self.diag_results;
+            let passed = results.iter().filter(|r| r.ok).count();
+            let all_ok = passed == results.len();
+            let finished = self.diag_pending.is_empty();
+            ui.horizontal(|ui| {
+                ui.colored_label(
+                    if all_ok {
+                        egui::Color32::LIGHT_GREEN
+                    } else {
+                        egui::Color32::LIGHT_RED
+                    },
+                    tr_fmt(
+                        lang,
+                        "{0}/{1} passed",
+                        &[&passed.to_string(), &results.len().to_string()],
+                    ),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Copy is only offered once every planned check has
+                    // finished, so the report is never partial.
+                    let copy = ui.add_enabled(
+                        finished,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            icons::CONTENT_COPY,
+                            tr(lang, "Copy report")
+                        )),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(format!(
-                                "{} {}",
-                                icons::CONTENT_COPY,
-                                tr(lang, "Copy report")
-                            ))
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(diagnostics::report_text(results));
-                        }
-                    });
+                    if copy.clicked() {
+                        ui.ctx().copy_text(diagnostics::report_text(results));
+                    }
+                    if !finished {
+                        copy.on_disabled_hover_text(tr(lang, "Waiting for all tests to finish…"));
+                    }
                 });
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
+            });
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
                     for result in results {
                         ui.horizontal(|ui| {
                             let color = if result.ok {
@@ -799,8 +818,14 @@ impl App {
                             ui.weak(&result.detail);
                         });
                     }
+                    for name in &self.diag_pending {
+                        ui.horizontal(|ui| {
+                            ui.weak("…   ");
+                            ui.monospace(name);
+                            ui.weak(tr(lang, "running…"));
+                        });
+                    }
                 });
-            }
         }
     }
 }

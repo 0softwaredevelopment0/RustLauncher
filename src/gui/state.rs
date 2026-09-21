@@ -576,8 +576,12 @@ pub struct App {
     /// Whether the Download Java section is expanded.
     pub java_download_open: bool,
 
-    // Diagnostics.
-    pub diag_results: Option<Vec<diagnostics::CheckResult>>,
+    // Diagnostics. `diag_results` holds finished checks (appended in real
+    // time as each background task completes); `diag_total` is the planned
+    // suite size, so pending rows can be shown while tests are running.
+    pub diag_results: Vec<diagnostics::CheckResult>,
+    /// Display names of the remaining (not yet finished) checks.
+    pub diag_pending: Vec<String>,
     pub diag_running: bool,
 
     // Background completions.
