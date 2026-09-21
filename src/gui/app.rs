@@ -751,6 +751,11 @@ impl App {
                             if let Some(pos) = app.diag_pending.iter().position(|n| *n == name) {
                                 app.diag_pending.remove(pos);
                             }
+                            // The run is over when no check is pending any
+                            // more — re-enable the Run tests button.
+                            if app.diag_pending.is_empty() {
+                                app.diag_running = false;
+                            }
                         },
                     );
                 }
