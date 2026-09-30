@@ -12,7 +12,8 @@ pub fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
-        .user_agent("RustLauncher/0.2")
+        // Always mirrors Cargo.toml — no hardcoded version to drift.
+        .user_agent(concat!("RustLauncher/", env!("CARGO_PKG_VERSION")))
         .build()
 }
 
