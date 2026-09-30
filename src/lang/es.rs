@@ -16,6 +16,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "{0} is already running" => "{0} ya se está ejecutando",
         "{0} is not available for {1}" => "{0} no está disponible para {1}",
         "{0} stopped" => "{0} detenido",
+        "version {0} is required but not installed" => "se necesita la versión {0}, pero no está instalada",
         "'{0}' will be removed from the launcher. The game directory on disk will NOT be deleted." => "'{0}' se eliminará del launcher. El directorio del juego en el disco NO se eliminará.",
         "{0}: checksum mismatch (expected {1}, got {2})" => "{0}: suma de comprobación no coincide (se esperaba {1}, se obtuvo {2})",
         "1. Add your nickname in Accounts\n2. Pick a version (install one from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!" => "1. Añade tu apodo en Cuentas\n2. Elige una versión (instala una desde el Catálogo si es necesario)\n3. Configura la RAM en Ajustes\n4. ¡Pulsa Jugar!",

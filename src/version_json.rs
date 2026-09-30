@@ -22,6 +22,10 @@ pub struct VersionJson {
     #[serde(default)]
     pub jar: Option<String>,
 
+    /// Parent version id for the vanilla-launcher merge (`inheritsFrom`).
+    #[serde(default)]
+    pub inherits_from: Option<String>,
+
     /// Asset index id for older formats (`"assets": "5"`).
     #[serde(default)]
     pub assets: Option<String>,
@@ -59,6 +63,44 @@ pub struct JavaVersion {
 #[derive(Debug, Clone, Deserialize)]
 pub struct LibraryEntry {
     pub name: String,
+
+    /// Maven repository base declared by modloader profiles
+    /// (`https://maven.fabricmc.net/`); empty in vanilla jsons.
+    #[serde(default)]
+    pub url: String,
+
+    /// SHA-1 declared next to `url` (some profiles carry it).
+    #[serde(default)]
+    pub sha1: String,
+
+    /// Vanilla-style per-artifact download info.
+    #[serde(default)]
+    pub downloads: Option<LibraryDownloads>,
+}
+
+/// Vanilla `downloads` block of a library entry.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LibraryDownloads {
+    #[serde(default)]
+    pub artifact: Option<LibraryArtifact>,
+}
+
+/// Vanilla `downloads.artifact` block: main jar URL and checksum.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LibraryArtifact {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub sha1: String,
+}
+
+impl LibraryEntry {
+    /// `(url, sha1)` of the main artifact from the vanilla-style
+    /// `downloads.artifact` block, when present.
+    pub fn artifact_download(&self) -> Option<(&str, &str)> {
+        let artifact = self.downloads.as_ref()?.artifact.as_ref()?;
+        Some((artifact.url.as_str(), artifact.sha1.as_str()))
+    }
 }
 
 impl VersionJson {
@@ -103,6 +145,15 @@ impl VersionJson {
     /// Resolve the `jar` reference (vanilla version the modloader builds upon).
     pub fn jar_reference(&self) -> Option<&str> {
         self.jar.as_deref()
+    }
+
+    /// The parent version this json builds upon: `inheritsFrom` when
+    /// declared, else the `jar` reference.
+    pub fn parent_id(&self) -> Option<&str> {
+        self.inherits_from
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.jar.as_deref())
     }
 }
 
@@ -179,12 +230,14 @@ mod tests {
             &path,
             r#"{
                 "id": "fabric-1.20.1",
+                "inheritsFrom": "1.20.1",
                 "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
                 "jar": "1.20.1",
                 "assetIndex": {"id": "5", "totalSize": 100, "url": "https://example"},
                 "javaVersion": {"majorVersion": 17},
                 "libraries": [
-                    {"name": "net.fabricmc:fabric-loader:0.15.0"},
+                    {"name": "net.fabricmc:fabric-loader:0.15.0",
+                     "url": "https://maven.fabricmc.net/"},
                     {"name": "org.lwjgl:lwjgl-glfw:3.3.2"}
                 ]
             }"#,
@@ -197,11 +250,37 @@ mod tests {
             "net.fabricmc.loader.impl.launch.knot.KnotClient"
         );
         assert_eq!(json.jar_reference(), Some("1.20.1"));
+        assert_eq!(json.parent_id(), Some("1.20.1"));
         assert_eq!(json.asset_index_id("fabric-1.20.1"), "5");
         assert_eq!(json.required_java_major(), Some(17));
         assert!(json.uses_lwjgl3());
+        assert_eq!(json.libraries[0].url, "https://maven.fabricmc.net/");
+        assert_eq!(json.libraries[1].url, "");
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn vanilla_library_artifact_downloads_parse() {
+        let json: VersionJson = serde_json::from_str(
+            r#"{"libraries": [{"name": "com.google.gson:gson:2.10.1",
+                "downloads": {"artifact": {
+                    "url": "https://libraries.minecraft.net/com/google/gson/gson/2.10.1/gson-2.10.1.jar",
+                    "sha1": "abc123"}}}]}"#,
+        )
+        .unwrap();
+        let lib = &json.libraries[0];
+        assert_eq!(
+            lib.artifact_download(),
+            Some((
+                "https://libraries.minecraft.net/com/google/gson/gson/2.10.1/gson-2.10.1.jar",
+                "abc123"
+            ))
+        );
+        assert_eq!(lib.url, "");
+        let bare: VersionJson =
+            serde_json::from_str(r#"{"libraries": [{"name": "a:b:1"}]}"#).unwrap();
+        assert_eq!(bare.libraries[0].artifact_download(), None);
     }
 
     #[test]

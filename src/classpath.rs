@@ -154,21 +154,77 @@ pub fn remove_conflicting_lwjgl(jars: &mut Vec<PathBuf>, libraries_dir: &Path) {
     });
 }
 
-/// Bootstrap libraries for modloader versions: resolve `version.json`'s
-/// library coordinates to existing jars under the libraries directory.
-pub fn bootstrap_libraries(version_json: &VersionJson, libraries_dir: &Path) -> Vec<PathBuf> {
-    version_json
-        .libraries
-        .iter()
-        .filter_map(|lib| maven_coordinate_to_path(libraries_dir, &lib.name))
-        .collect()
+/// The client jar to launch: the version's own jar when present, else the
+/// parent jar referenced via `inheritsFrom`/`jar` (modloader versions ship
+/// no jar of their own).
+fn resolve_game_jar(
+    game_dir: &Path,
+    version_json: &VersionJson,
+    version_jar: &Path,
+) -> Option<PathBuf> {
+    if version_jar.is_file() {
+        return Some(version_jar.to_path_buf());
+    }
+    let referenced = version_json.jar_reference()?;
+    let jar = game_dir
+        .join("versions")
+        .join(referenced)
+        .join(format!("{referenced}.jar"));
+    jar.is_file().then_some(jar)
+}
+
+/// Resolve the library jars declared by the version json and its parent
+/// chain (`inheritsFrom`/`jar`), child entries first. Parent jsons load
+/// from the installed versions (best effort); jars missing on disk are
+/// skipped — `ensure_version_libraries` downloads them before the launch.
+fn chain_libraries(
+    game_dir: &Path,
+    version_json: &VersionJson,
+    libraries_dir: &Path,
+) -> Vec<PathBuf> {
+    let mut jsons: Vec<VersionJson> = vec![version_json.clone()];
+    let mut visited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut next = version_json.parent_id().map(str::to_string);
+    while let Some(id) = next {
+        if !visited.insert(id.clone()) {
+            break;
+        }
+        let direct = game_dir.join("versions").join(&id).join(format!("{id}.json"));
+        let path = if direct.is_file() {
+            Some(direct)
+        } else {
+            crate::version::list_versions(game_dir)
+                .ok()
+                .and_then(|versions| versions.into_iter().find(|v| v.name == id))
+                .map(|v| v.json)
+                .filter(|p| p.is_file())
+        };
+        let Some(path) = path else { break };
+        let Ok(parent) = VersionJson::load(&path) else { break };
+        next = parent.parent_id().map(str::to_string);
+        jsons.push(parent);
+    }
+
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut jars = Vec::new();
+    for json in &jsons {
+        for lib in &json.libraries {
+            if seen.insert(lib.name.clone()) {
+                if let Some(jar) = maven_coordinate_to_path(libraries_dir, &lib.name) {
+                    jars.push(jar);
+                }
+            }
+        }
+    }
+    jars
 }
 
 /// Build the final classpath for a version.
 ///
-/// - Fabric-like versions (main class contains `KnotClient`): version jar +
-///   bootstrap libraries from version.json only — Fabric's own classloader
-///   loads the rest, and duplicates on `-cp` break signed-jar loading.
+/// - Fabric/Quilt versions (main class contains `KnotClient`): the parent
+///   client jar (`inheritsFrom`/`jar`) + the libraries declared by the
+///   version json and its parent chain. Fabric's own classloader then loads
+///   the mod side; duplicates on `-cp` break signed-jar loading.
 /// - Vanilla / Forge: all library jars + the version jar + referenced jar.
 pub fn build_classpath(
     game_dir: &Path,
@@ -186,8 +242,16 @@ pub fn build_classpath(
 
     let is_fabric = version_json.main_class().contains("KnotClient");
     if is_fabric {
-        entries.push(version_jar.to_path_buf());
-        entries.extend(bootstrap_libraries(version_json, &libraries_dir));
+        let Some(game_jar) = resolve_game_jar(game_dir, version_json, version_jar) else {
+            return Err(anyhow::anyhow!(
+                "no game jar for '{}': {} is missing and no parent jar reference resolves",
+                _version_name,
+                version_jar.display()
+            ));
+        };
+        entries.push(game_jar);
+        entries.extend(chain_libraries(game_dir, version_json, &libraries_dir));
+        deduplicate_artifacts(&mut entries, &libraries_dir);
     } else {
         entries.extend(collect_jars(&libraries_dir));
         if let Some(referenced) = version_json.jar_reference() {
@@ -334,5 +398,78 @@ mod tests {
         assert_eq!(compare_versions("1.7.10", "1.7.2"), Greater);
         assert_eq!(compare_versions("3.3.1", "3.3.1"), Equal);
         assert_eq!(compare_versions("2.8.9", "2.10.0"), Less);
+    }
+
+    #[test]
+    fn fabric_classpath_resolves_parent_chain() {
+        let tmp = tmp_root("fabric-chain");
+        let _ = fs::remove_dir_all(&tmp);
+        let libs = tmp.join("libraries");
+        // Parent vanilla json + client jar; fabric json without a jar of
+        // its own (the layout install_loader produces).
+        let parent_dir = tmp.join("versions").join("1.20.1");
+        fs::create_dir_all(&parent_dir).unwrap();
+        let parent_json_path = parent_dir.join("1.20.1.json");
+        fs::write(
+            &parent_json_path,
+            r#"{"id": "1.20.1", "mainClass": "net.minecraft.client.main.Main",
+                "libraries": [{"name": "org.lwjgl:lwjgl:3.3.2"}]}"#,
+        )
+        .unwrap();
+        touch(&parent_dir.join("1.20.1.jar"));
+        touch(&libs.join("org/lwjgl/lwjgl/3.3.2/lwjgl-3.3.2.jar"));
+        touch(&libs.join("net/fabricmc/fabric-loader/0.15.0/fabric-loader-0.15.0.jar"));
+
+        let fabric_dir = tmp.join("versions").join("fabric-loader-0.15.0-1.20.1");
+        fs::create_dir_all(&fabric_dir).unwrap();
+        let fabric_json_path = fabric_dir.join("fabric-loader-0.15.0-1.20.1.json");
+        fs::write(
+            &fabric_json_path,
+            r#"{"id": "fabric-loader-0.15.0-1.20.1", "inheritsFrom": "1.20.1", "jar": "1.20.1",
+                "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+                "libraries": [{"name": "net.fabricmc:fabric-loader:0.15.0"}]}"#,
+        )
+        .unwrap();
+        let fabric_json = VersionJson::load(&fabric_json_path).unwrap();
+
+        let cp = build_classpath(
+            &tmp,
+            "fabric-loader-0.15.0-1.20.1",
+            &fabric_json,
+            &fabric_dir.join("fabric-loader-0.15.0-1.20.1.jar"),
+        )
+        .unwrap();
+        assert!(cp.contains("1.20.1.jar"), "parent client jar expected: {cp}");
+        assert!(
+            cp.contains("fabric-loader-0.15.0.jar"),
+            "loader library expected: {cp}"
+        );
+        assert!(
+            cp.contains("lwjgl-3.3.2.jar"),
+            "parent libraries must come through the chain: {cp}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fabric_classpath_requires_a_resolvable_game_jar() {
+        let tmp = tmp_root("fabric-nojar");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let json: VersionJson = serde_json::from_str(
+            r#"{"mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient"}"#,
+        )
+        .unwrap();
+        let err = build_classpath(
+            &tmp,
+            "fabric-x",
+            &json,
+            &tmp.join("versions").join("fabric-x").join("fabric-x.jar"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no game jar"));
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

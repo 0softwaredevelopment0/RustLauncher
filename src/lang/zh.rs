@@ -16,6 +16,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "{0} is already running" => "{0} 已在运行",
         "{0} is not available for {1}" => "{0} 不适用于 {1}",
         "{0} stopped" => "{0} 已停止",
+        "version {0} is required but not installed" => "需要版本 {0}，但尚未安装",
         "'{0}' will be removed from the launcher. The game directory on disk will NOT be deleted." => "“{0}”将从启动器中移除。磁盘上的游戏目录不会被删除。",
         "{0}: checksum mismatch (expected {1}, got {2})" => "{0}：校验和不匹配（应为 {1}，实际为 {2}）",
         "1. Add your nickname in Accounts\n2. Pick a version (install one from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!" => "1. 在“账户”中添加你的昵称\n2. 选择一个版本（如有需要可在“目录”中安装）\n3. 在“设置”中配置内存\n4. 按下“开始游戏”！",

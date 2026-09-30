@@ -184,13 +184,19 @@ fn cmd_launch(
 
     // Version.
     let found = version::find_version(&root, version_name)?;
-    if !found.jar.is_file() {
+    let json = version_json::VersionJson::load(&found.json)?;
+
+    // Modloader versions (Fabric/Quilt) ship no jar of their own; they
+    // reference the parent client jar via inheritsFrom/jar instead.
+    let parent_jar = json
+        .jar_reference()
+        .map(|r| root.join("versions").join(r).join(format!("{r}.jar")));
+    if !found.jar.is_file() && !parent_jar.is_some_and(|p| p.is_file()) {
         return Err(anyhow::anyhow!(
-            "version jar missing: {}",
+            "version jar missing: {} (and the jar reference does not resolve)",
             found.jar.display()
         ));
     }
-    let json = version_json::VersionJson::load(&found.json)?;
     println!(
         "  Version:  {} (mainClass: {})",
         found.name,
@@ -209,6 +215,19 @@ fn cmd_launch(
         format!("{ram_trim}m")
     };
     let jvm_flags = format!("-Xms1m -Xmx{ram_value}");
+
+    // Fetch libraries the version json (and its parent chain) declares but
+    // that are missing on disk; dry-run stays offline.
+    if !dry_run {
+        let agent = net::agent();
+        updater::ensure_version_libraries(
+            &agent,
+            &root,
+            &json,
+            lang::Language::English,
+            &mut |msg| println!("  {msg}"),
+        )?;
+    }
 
     let plan = launcher::build_launch_plan(
         &root,

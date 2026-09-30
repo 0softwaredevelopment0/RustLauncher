@@ -19,6 +19,7 @@ use sha1::{Digest, Sha1};
 
 use crate::lang::{tr, tr_fmt, Language};
 use crate::net;
+use crate::version_json::VersionJson;
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(non_snake_case, dead_code)] // `releaseTime` is kept for the UI layer
@@ -703,6 +704,106 @@ fn coordinate_rel(coordinate: &str) -> String {
     format!("{group_path}/{artifact}/{version}/{file}")
 }
 
+// ---------------------------------------------------------------------------
+// Launch-time library resolution
+// ---------------------------------------------------------------------------
+
+/// Default Maven repository for libraries whose json entry declares no URL.
+const DEFAULT_LIBRARY_REPO: &str = "https://libraries.minecraft.net/";
+
+/// Resolve the download URL of a version-json library entry: the vanilla
+/// `downloads.artifact.url` when present, else the entry's own repository
+/// `url`, else the default Mojang libraries repository.
+fn library_download_url(entry: &crate::version_json::LibraryEntry) -> String {
+    if let Some((url, _)) = entry.artifact_download() {
+        if !url.is_empty() {
+            return url.to_string();
+        }
+    }
+    let rel = coordinate_rel(&entry.name);
+    if !entry.url.is_empty() {
+        return format!("{}/{}", entry.url.trim_end_matches('/'), rel);
+    }
+    format!("{DEFAULT_LIBRARY_REPO}{rel}")
+}
+
+/// Load the version json of an installed version by id: the standard
+/// `versions/<id>/<id>.json` layout first, then any scanned version dir.
+fn load_installed_version_json(game_dir: &Path, id: &str, lang: Language) -> Result<VersionJson> {
+    let direct = game_dir.join("versions").join(id).join(format!("{id}.json"));
+    let path = if direct.is_file() {
+        direct
+    } else {
+        crate::version::list_versions(game_dir)
+            .ok()
+            .and_then(|versions| versions.into_iter().find(|v| v.name == id))
+            .map(|v| v.json)
+            .filter(|p| p.is_file())
+            .ok_or_else(|| {
+                anyhow!(
+                    "{}",
+                    tr_fmt(lang, "version {0} is required but not installed", &[id])
+                )
+            })?
+    };
+    VersionJson::load(&path)
+}
+
+/// Ensure every library declared by the version json and its parent chain
+/// (`inheritsFrom`/`jar`) exists under `<game_dir>/libraries`, downloading
+/// missing jars. Called right before the launch, so a version whose json
+/// was added without libraries (Fabric/Quilt profiles, hand-copied dirs)
+/// still starts instead of failing with "could not find the game".
+pub fn ensure_version_libraries(
+    agent: &ureq::Agent,
+    game_dir: &Path,
+    json: &VersionJson,
+    lang: Language,
+    progress: &mut dyn FnMut(&str),
+) -> Result<()> {
+    // Parent chain, child first; `visited` guards against cycles.
+    let mut jsons: Vec<VersionJson> = vec![json.clone()];
+    let mut visited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut next = json.parent_id().map(str::to_string);
+    while let Some(id) = next {
+        if !visited.insert(id.clone()) {
+            break;
+        }
+        let parent = load_installed_version_json(game_dir, &id, lang)?;
+        next = parent.parent_id().map(str::to_string);
+        jsons.push(parent);
+    }
+
+    let libs_dir = game_dir.join("libraries");
+    let total: usize = jsons.iter().map(|j| j.libraries.len()).sum();
+    let mut done = 0usize;
+    for version_json in &jsons {
+        for lib in &version_json.libraries {
+            done += 1;
+            // Malformed coordinates cannot map to a maven path; classpath
+            // assembly skips them the same way.
+            let Some(dest) = coordinate_to_path(&libs_dir, &lib.name) else {
+                continue;
+            };
+            if dest.is_file() {
+                continue;
+            }
+            let sha1 = match lib.artifact_download() {
+                Some((_, sha1)) if !sha1.is_empty() => sha1.to_string(),
+                _ => lib.sha1.clone(),
+            };
+            let url = library_download_url(lib);
+            fetch_to_file(agent, &url, &dest, &sha1, progress, lang)?;
+            progress(&tr_fmt(
+                lang,
+                "libraries {0}/{1}",
+                &[&done.to_string(), &total.to_string()],
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Rewrite a downloaded profile json before saving: fill `jar` with the
 /// vanilla id when missing (so the launcher can find the client jar) and
 /// keep everything else byte-identical where possible.
@@ -923,6 +1024,47 @@ mod tests {
         assert!(url.starts_with("https://maven.fabricmc.net/"));
         let (url, _) = library_source(&no_url, Loader::Quilt).unwrap();
         assert!(url.starts_with("https://maven.quiltmc.org/"));
+    }
+
+    #[test]
+    fn library_download_url_resolution_order() {
+        let with_artifact = crate::version_json::LibraryEntry {
+            name: "com.google.gson:gson:2.10.1".into(),
+            url: String::new(),
+            sha1: String::new(),
+            downloads: Some(crate::version_json::LibraryDownloads {
+                artifact: Some(crate::version_json::LibraryArtifact {
+                    url: "https://libraries.minecraft.net/gson-2.10.1.jar".into(),
+                    sha1: "abc".into(),
+                }),
+            }),
+        };
+        assert_eq!(
+            library_download_url(&with_artifact),
+            "https://libraries.minecraft.net/gson-2.10.1.jar"
+        );
+
+        let with_repo = crate::version_json::LibraryEntry {
+            name: "net.fabricmc:fabric-loader:0.19.5".into(),
+            url: "https://maven.fabricmc.net/".into(),
+            sha1: String::new(),
+            downloads: None,
+        };
+        assert_eq!(
+            library_download_url(&with_repo),
+            "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar"
+        );
+
+        let bare = crate::version_json::LibraryEntry {
+            name: "org.ow2.asm:asm:9.6".into(),
+            url: String::new(),
+            sha1: String::new(),
+            downloads: None,
+        };
+        assert_eq!(
+            library_download_url(&bare),
+            "https://libraries.minecraft.net/org/ow2/asm/asm/9.6/asm-9.6.jar"
+        );
     }
 
     #[test]

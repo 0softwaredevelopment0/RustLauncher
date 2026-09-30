@@ -16,6 +16,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "{0} is already running" => "{0} は既に実行中です",
         "{0} is not available for {1}" => "{0} は {1} では利用できません",
         "{0} stopped" => "{0} を停止しました",
+        "version {0} is required but not installed" => "バージョン {0} が必要ですが、インストールされていません",
         "'{0}' will be removed from the launcher. The game directory on disk will NOT be deleted." => "'{0}' はランチャーから削除されます。ディスク上のゲームディレクトリは削除されません。",
         "{0}: checksum mismatch (expected {1}, got {2})" => "{0}: チェックサムが一致しません (期待値 {1}、実際 {2})",
         "1. Add your nickname in Accounts\n2. Pick a version (install one from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!" => "1. アカウントでニックネームを追加\n2. バージョンを選択 (必要ならカタログからインストール)\n3. 設定で RAM を構成\n4. プレイを押す!",

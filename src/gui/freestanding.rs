@@ -1236,6 +1236,15 @@ pub(crate) fn run_game_process(
     game_stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
 ) -> Result<i32> {
     let json = VersionJson::load(&version.json)?;
+    // Download libraries the version json (and its parent chain) declares
+    // but that are missing on disk: the first launch of a Fabric/Quilt
+    // profile or a hand-copied version must fetch them before the JVM
+    // starts, otherwise the modloader exits with "could not find the game".
+    let agent = crate::net::agent();
+    let lib_console = console.clone();
+    let mut lib_progress =
+        |msg: &str| push_line(&lib_console, format!("[RustLauncher] {msg}"));
+    updater::ensure_version_libraries(&agent, game_dir, &json, settings.language, &mut lib_progress)?;
     let plan = launcher::build_launch_plan(
         game_dir,
         &version.name,
