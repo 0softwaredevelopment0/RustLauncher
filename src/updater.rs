@@ -206,9 +206,11 @@ fn fetch_neoforge_builds(
     let mut builds: Vec<LoaderBuild> = parsed
         .versions
         .into_iter()
-        .filter(|v| v.starts_with(&prefix) && !v.contains('-'))
+        .filter(|v| v.starts_with(&prefix))
         .map(|v| {
-            let stable = !v.contains("beta");
+            // NeoForge 26.x ships through `-beta`/`-alpha` suffixed builds;
+            // a bare version string is a stable release.
+            let stable = !v.contains("-beta") && !v.contains("-alpha");
             LoaderBuild { version: v, stable }
         })
         .collect();
@@ -218,11 +220,12 @@ fn fetch_neoforge_builds(
 }
 
 /// NeoForge is numbered after the MC minor: MC `1.21.4` -> NeoForge
-/// `21.4.<build>` (so the prefix is `<mc-minor>.<mc-patch>.`). Older MC
-/// versions have no NeoForge; returns an error the UI can show for those.
+/// `21.4.<build>`, and year-based ids map directly: MC `26.3` ->
+/// `26.3.<build>`. Older MC versions have no NeoForge; returns an error
+/// the UI can show for those.
 fn neoforge_major_minor(mc: &str, lang: Language) -> Result<(u32, u32)> {
     let mut parts = mc.split('.');
-    let _mc_major = parts
+    let first = parts
         .next()
         .and_then(|p| p.parse::<u32>().ok())
         .ok_or_else(|| {
@@ -231,7 +234,7 @@ fn neoforge_major_minor(mc: &str, lang: Language) -> Result<(u32, u32)> {
                 tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc])
             )
         })?;
-    let minor = parts
+    let second = parts
         .next()
         .and_then(|p| p.parse::<u32>().ok())
         .ok_or_else(|| {
@@ -240,26 +243,33 @@ fn neoforge_major_minor(mc: &str, lang: Language) -> Result<(u32, u32)> {
                 tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc])
             )
         })?;
-    let patch = parts
-        .next()
-        .and_then(|p| p.parse::<u32>().ok())
-        .ok_or_else(|| {
-            anyhow!(
+    // Legacy `1.x.y`: NeoForge numbers are `x.y.<build>` (leading 1
+    // dropped) and require 1.20.2+. Year-based ids (`26.3`) map directly
+    // to `26.3.<build>`.
+    if first == 1 {
+        let patch = parts
+            .next()
+            .and_then(|p| p.parse::<u32>().ok())
+            .ok_or_else(|| {
+                anyhow!(
+                    "{}",
+                    tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc])
+                )
+            })?;
+        if second < 20 || (second == 20 && patch < 2) {
+            return Err(anyhow!(
                 "{}",
-                tr_fmt(lang, "cannot map NeoForge onto version '{0}'", &[mc])
-            )
-        })?;
-    if minor < 20 || (minor == 20 && patch < 2) {
-        return Err(anyhow!(
-            "{}",
-            tr_fmt(
-                lang,
-                "NeoForge does not support {0} (requires 1.20.2+)",
-                &[mc]
-            )
-        ));
+                tr_fmt(
+                    lang,
+                    "NeoForge does not support {0} (requires 1.20.2+)",
+                    &[mc]
+                )
+            ));
+        }
+        Ok((second, patch))
+    } else {
+        Ok((first, second))
     }
-    Ok((minor, patch))
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,11 +299,18 @@ fn fetch_forge_builds(_agent: &ureq::Agent, mc: &str, lang: Language) -> Result<
     Ok(builds)
 }
 
-/// Numeric-aware comparison of dot-separated versions (`54.1.9` < `54.1.14`).
+/// Numeric-aware comparison of dot-separated versions; each segment
+/// compares by its leading digits (`54.1.9` < `54.1.14`, `37-beta` -> 37).
 fn cmp_version_parts(a: &str, b: &str) -> std::cmp::Ordering {
-    let pa: Vec<u64> = a.split('.').filter_map(|p| p.parse().ok()).collect();
-    let pb: Vec<u64> = b.split('.').filter_map(|p| p.parse().ok()).collect();
+    let pa: Vec<u64> = a.split('.').map(numeric_prefix).collect();
+    let pb: Vec<u64> = b.split('.').map(numeric_prefix).collect();
     pa.cmp(&pb)
+}
+
+/// The leading digit run of a version segment (`37-beta` -> 37, no digits -> 0).
+fn numeric_prefix(segment: &str) -> u64 {
+    let digits: String = segment.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().unwrap_or(0)
 }
 
 #[derive(Debug, Deserialize)]
@@ -634,23 +651,77 @@ pub fn install_loader(
             let final_json = finalize_profile(&bytes, &profile, mc)?;
             std::fs::write(version_dir.join(format!("{version_id}.json")), final_json)?;
         }
-        Loader::NeoForge | Loader::Forge => {
+        Loader::NeoForge => {
+            // NeoForge publishes a vanilla-format version.json inside its
+            // installer jar (real mainClass, FML libraries, launch
+            // arguments); use it as the profile instead of hand-assembling
+            // a minimal one.
+            let maven_base = "https://maven.neoforged.net/releases";
+            let build_version = &build.version;
+            let installer_url = format!(
+                "{maven_base}/net/neoforged/neoforge/{build_version}/neoforge-{build_version}-installer.jar"
+            );
+            let installer = net::get_bytes(agent, &installer_url, lang)?;
+            let meta_bytes = installer_version_json(&installer).with_context(|| {
+                tr_fmt(lang, "bad {0} installer for {1}", &["NeoForge", mc])
+            })?;
+            let meta: VersionJson = serde_json::from_slice(&meta_bytes).with_context(|| {
+                tr_fmt(lang, "bad {0} installer for {1}", &["NeoForge", mc])
+            })?;
+
+            // The loader jar itself plus every library the metadata lists
+            // (vanilla-format entries with downloads.artifact URLs and
+            // per-OS natives classifiers).
+            let libs_dir = game_dir.join("libraries");
+            let universal = MetaLibrary {
+                name: format!("net.neoforged:neoforge:{build_version}:universal"),
+                url: format!("{maven_base}/"),
+                sha1: String::new(),
+            };
+            let (url, _) = library_source(&universal, loader)?;
+            let dest = coordinate_to_path(&libs_dir, &universal.name).ok_or_else(|| {
+                anyhow!(
+                    "{}",
+                    tr_fmt(lang, "bad library coordinate: {0}", &[&universal.name])
+                )
+            })?;
+            if fetch_to_file(agent, &url, &dest, "", &mut progress, lang)? {
+                downloaded += 1;
+            }
+            let natives = natives_os();
+            for lib in &meta.libraries {
+                if coordinate_to_path(&libs_dir, &lib.name).is_none() {
+                    continue;
+                }
+                download_library_entry(agent, &libs_dir, lib, natives, lang, &mut progress)?;
+                downloaded += 1;
+            }
+            progress(&tr_fmt(
+                lang,
+                "libraries {0}/{1}",
+                &[&meta.libraries.len().to_string(), &meta.libraries.len().to_string()],
+            ));
+
+            // Rewrite the metadata into our version entry: our id, and the
+            // parent reference guaranteed to resolve.
+            let mut value: serde_json::Value = serde_json::from_slice(&meta_bytes)?;
+            value["id"] = serde_json::Value::String(version_id.clone());
+            if value.get("jar").is_none() {
+                value["jar"] = serde_json::Value::String(mc.to_string());
+            }
+            if value.get("inheritsFrom").is_none() {
+                value["inheritsFrom"] = serde_json::Value::String(mc.to_string());
+            }
+            let json = serde_json::to_vec_pretty(&value)?;
+            std::fs::write(version_dir.join(format!("{version_id}.json")), json)?;
+        }
+        Loader::Forge => {
             // Assemble a minimal launcher profile: main class + the loader
             // jar as a library. The loader bootstraps the rest itself.
-            let (maven_base, coordinate, main_class) = match loader {
-                Loader::NeoForge => (
-                    "https://maven.neoforged.net/releases",
-                    format!("net.neoforged:neoforge:{}:universal", build.version),
-                    "net.neoforged.fml.loading.ImmediateWindowHandler",
-                ),
-                _ => (
-                    "https://maven.minecraftforge.net",
-                    format!("net.minecraftforge:forge:{}:universal", build.version),
-                    "net.minecraftforge.fml.loading.ImmediateWindowHandler",
-                ),
-            };
+            // (Forge installers need processor-based patching; not wired.)
+            let maven_base = "https://maven.minecraftforge.net";
             let lib = MetaLibrary {
-                name: coordinate,
+                name: format!("net.minecraftforge:forge:{}:universal", build.version),
                 url: format!("{maven_base}/"),
                 sha1: String::new(),
             };
@@ -666,8 +737,13 @@ pub fn install_loader(
                 downloaded += 1;
             }
 
-            let profile =
-                neoforge_forge_profile(loader, mc, &build.version, &version_id, main_class);
+            let profile = neoforge_forge_profile(
+                loader,
+                mc,
+                &build.version,
+                &version_id,
+                "net.minecraftforge.fml.loading.ImmediateWindowHandler",
+            );
             let json = serde_json::to_vec_pretty(&profile)?;
             std::fs::write(version_dir.join(format!("{version_id}.json")), json)?;
         }
@@ -862,6 +938,19 @@ pub fn ensure_version_libraries(
     Ok(())
 }
 
+/// Extract the vanilla-format `version.json` embedded in a mod-loader
+/// installer jar (NeoForge ships its launcher profile there).
+fn installer_version_json(installer_jar: &[u8]) -> Result<Vec<u8>> {
+    let reader = std::io::Cursor::new(installer_jar);
+    let mut archive = zip::ZipArchive::new(reader).context("broken installer jar")?;
+    let mut entry = archive
+        .by_name("version.json")
+        .context("installer jar has no version.json")?;
+    let mut out = Vec::new();
+    std::io::Read::read_to_end(&mut entry, &mut out)?;
+    Ok(out)
+}
+
 /// Rewrite a downloaded profile json before saving: fill `jar` with the
 /// vanilla id when missing (so the launcher can find the client jar) and
 /// keep everything else byte-identical where possible.
@@ -882,10 +971,18 @@ fn neoforge_forge_profile(
     version_id: &str,
     main_class: &str,
 ) -> serde_json::Value {
-    let coordinate = match loader {
-        Loader::NeoForge => format!("net.neoforged:neoforge:{build}:universal"),
-        _ => format!("net.minecraftforge:forge:{build}:universal"),
+    let (maven_base, coordinate) = match loader {
+        Loader::NeoForge => (
+            "https://maven.neoforged.net/releases",
+            format!("net.neoforged:neoforge:{build}:universal"),
+        ),
+        _ => (
+            "https://maven.minecraftforge.net",
+            format!("net.minecraftforge:forge:{build}:universal"),
+        ),
     };
+    // The `url` lets launch-time library resolution fetch the jar from the
+    // loader's own maven instead of the default Mojang repository.
     serde_json::json!({
         "id": version_id,
         "inheritsFrom": mc,
@@ -894,7 +991,7 @@ fn neoforge_forge_profile(
         "time": "2024-01-01T00:00:00+00:00",
         "type": "release",
         "mainClass": main_class,
-        "libraries": [ { "name": coordinate } ],
+        "libraries": [ { "name": coordinate, "url": format!("{maven_base}/") } ],
         "arguments": { "game": [], "jvm": [] }
     })
 }
@@ -1021,6 +1118,15 @@ mod tests {
         assert!(neoforge_major_minor("1.20.1", crate::lang::Language::English).is_err());
         assert!(neoforge_major_minor("1.12.2", crate::lang::Language::English).is_err());
         assert!(neoforge_major_minor("not-a-version", crate::lang::Language::English).is_err());
+        // Year-based ids map directly to `<year>.<minor>.<build>`.
+        assert_eq!(
+            neoforge_major_minor("26.3", crate::lang::Language::English).unwrap(),
+            (26, 3)
+        );
+        assert_eq!(
+            neoforge_major_minor("1.21.4", crate::lang::Language::English).unwrap(),
+            (21, 4)
+        );
     }
 
     #[test]
@@ -1163,6 +1269,30 @@ mod tests {
     }
 
     #[test]
+    fn installer_version_json_extracts_profile() {
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(buf);
+        writer
+            .start_file("version.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, br#"{"id":"x","mainClass":"a.B"}"#).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let meta = installer_version_json(&bytes).unwrap();
+        let parsed: VersionJson = serde_json::from_slice(&meta).unwrap();
+        assert_eq!(parsed.main_class(), "a.B");
+
+        let no_entry = std::io::Cursor::new(Vec::new());
+        let mut writer2 = zip::ZipWriter::new(no_entry);
+        writer2
+            .start_file("other.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer2, b"x").unwrap();
+        let bytes2 = writer2.finish().unwrap().into_inner();
+        assert!(installer_version_json(&bytes2).is_err());
+    }
+
+    #[test]
     fn loader_version_ids_use_expected_shapes() {
         let build = LoaderBuild {
             version: "0.19.5".into(),
@@ -1186,6 +1316,10 @@ mod tests {
         assert_eq!(
             profile["libraries"][0]["name"],
             "net.neoforged:neoforge:21.4.157:universal"
+        );
+        assert_eq!(
+            profile["libraries"][0]["url"],
+            "https://maven.neoforged.net/releases/"
         );
 
         let _ = build;

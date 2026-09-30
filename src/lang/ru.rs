@@ -21,6 +21,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "{0} is not available for {1}" => "{0} недоступен для {1}",
         "{0} stopped" => "{0} остановлен",
         "version {0} is required but not installed" => "требуется версия {0}, но она не установлена",
+        "bad {0} installer for {1}" => "повреждённый установщик {0} для {1}",
         "'{0}' will be removed from the launcher. The game directory on disk will NOT be deleted." => "'{0}' будет удалён из лаунчера. Каталог игры на диске НЕ будет удалён.",
         "{0}: checksum mismatch (expected {1}, got {2})" => "{0}: несовпадение контрольной суммы (ожидалось {1}, получено {2})",
         "1. Add your nickname in Accounts\n2. Pick a version (install one from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!" => "1. Добавьте свой никнейм в разделе «Аккаунты»\n2. Выберите версию (при необходимости установите её из Каталога)\n3. Настройте ОЗУ в разделе «Настройки»\n4. Нажмите «Играть»!",

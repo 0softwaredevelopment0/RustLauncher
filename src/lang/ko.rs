@@ -58,6 +58,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "{0} is not available for {1}" => "{0}은(는) {1}에서 사용할 수 없습니다",
         "{0} stopped" => "{0} 중지됨",
         "version {0} is required but not installed" => "버전 {0}이(가) 필요하지만 설치되어 있지 않습니다",
+        "bad {0} installer for {1}" => "{1}에 대한 {0} 설치 프로그램이 잘못되었습니다",
         "'{0}' will be removed from the launcher. The game directory on disk will NOT be deleted." => "'{0}'이(가) 런처에서 제거됩니다. 디스크의 게임 디렉터리는 삭제되지 않습니다.",
         "{0}: checksum mismatch (expected {1}, got {2})" => "{0}: 체크섬 불일치 (예상 {1}, 실제 {2})",
         "▲ click to collapse" => "▲ 클릭하여 접기",

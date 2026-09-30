@@ -56,6 +56,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "{0} is not available for {1}" => "{0} n'est pas disponible pour {1}",
         "{0} stopped" => "{0} arrêté",
         "version {0} is required but not installed" => "la version {0} est requise mais n'est pas installée",
+        "bad {0} installer for {1}" => "programme d'installation de {0} incorrect pour {1}",
         "'{0}' will be removed from the launcher. The game directory on disk will NOT be deleted." => "'{0}' sera supprimé du launcher. Le dossier de jeu sur le disque ne sera PAS supprimé.",
         "{0}: checksum mismatch (expected {1}, got {2})" => "{0} : somme de contrôle incorrecte (attendue {1}, obtenue {2})",
         "1. Add your nickname in Accounts\n2. Pick a version (install one from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!" => "1. Ajoutez votre pseudo dans Comptes\n2. Choisissez une version (installez-en une depuis le Catalogue si nécessaire)\n3. Configurez la RAM dans Paramètres\n4. Appuyez sur Jouer !",

@@ -240,8 +240,13 @@ pub fn build_classpath(
     };
     let mut entries: Vec<PathBuf> = Vec::new();
 
-    let is_fabric = version_json.main_class().contains("KnotClient");
-    if is_fabric {
+    let is_knot = version_json.main_class().contains("KnotClient");
+    // Merged modloader profiles (inheritsFrom) must use exactly the
+    // libraries declared by their chain: collecting every jar under
+    // libraries/ drags in unrelated jars from other launchers and breaks
+    // FML with duplicate/old ASM classes.
+    let is_merged = version_json.inherits_from.is_some();
+    if is_knot || is_merged {
         let Some(game_jar) = resolve_game_jar(game_dir, version_json, version_jar) else {
             return Err(anyhow::anyhow!(
                 "no game jar for '{}': {} is missing and no parent jar reference resolves",

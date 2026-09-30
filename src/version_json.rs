@@ -42,6 +42,41 @@ pub struct VersionJson {
     /// Library list (Maven coordinates).
     #[serde(default)]
     pub libraries: Vec<LibraryEntry>,
+
+    /// Optional `arguments` block (vanilla/NeoForge profiles): extra JVM
+    /// and game arguments the profile wants on the command line.
+    #[serde(default)]
+    pub arguments: Option<Arguments>,
+}
+
+/// The `arguments` block of a version json.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Arguments {
+    #[serde(default)]
+    pub game: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub jvm: Vec<serde_json::Value>,
+}
+
+impl Arguments {
+    /// Plain string entries of a list. Rule-conditioned objects and
+    /// unresolved `${...}` placeholders are skipped: the launcher passes
+    /// its own account/window/server args, and placeholders would leak.
+    pub fn strings<'a>(entries: &'a [serde_json::Value]) -> Vec<&'a str> {
+        entries
+            .iter()
+            .filter_map(|v| v.as_str())
+            .filter(|s| !s.contains("${"))
+            .collect()
+    }
+
+    pub fn game_strings(&self) -> Vec<&str> {
+        Self::strings(&self.game)
+    }
+
+    pub fn jvm_strings(&self) -> Vec<&str> {
+        Self::strings(&self.jvm)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

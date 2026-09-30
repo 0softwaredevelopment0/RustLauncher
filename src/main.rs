@@ -46,6 +46,12 @@ fn main() {
     let result = match &cli.command {
         None => cmd_gui(),
         Some(Command::Versions { game_dir }) => cmd_versions(game_dir.as_deref()),
+        Some(Command::Install {
+            mc,
+            loader,
+            build,
+            game_dir,
+        }) => cmd_install(mc, loader, build.as_deref(), game_dir),
         Some(Command::Launch {
             version,
             game_dir,
@@ -133,6 +139,76 @@ fn cmd_versions(game_dir: Option<&str>) -> Result<()> {
             "  (jar missing!)"
         };
         println!("  - {}{marker}", v.name);
+    }
+    Ok(())
+}
+
+/// Install a version from the Mojang catalog (vanilla) or a mod-loader
+/// meta (fabric/quilt/neoforge/forge) into the game directory.
+fn cmd_install(mc: &str, loader: &str, build: Option<&str>, game_dir: &str) -> Result<()> {
+    let root = std::path::PathBuf::from(game_dir.trim());
+    if !root.is_dir() {
+        return Err(anyhow::anyhow!(
+            "game directory does not exist: {}",
+            root.display()
+        ));
+    }
+    let agent = net::agent();
+    let lang = lang::Language::English;
+    let mut progress = |msg: &str| println!("  {msg}");
+
+    match loader.trim().to_ascii_lowercase().as_str() {
+        "vanilla" => {
+            let manifest = updater::fetch_manifest(&agent, lang)?;
+            let version = updater::find_version(&manifest, mc)
+                .ok_or_else(|| anyhow::anyhow!("version '{mc}' not found in the Mojang manifest"))?;
+            println!("Installing vanilla {mc} into {}", root.display());
+            let outcome = updater::install_version(&agent, &root, version, lang, &mut progress)?;
+            println!(
+                "Installed {} ({} file(s) downloaded)",
+                outcome.version_id, outcome.downloaded_files
+            );
+        }
+        kind => {
+            let loader_kind = match kind {
+                "fabric" => updater::Loader::Fabric,
+                "quilt" => updater::Loader::Quilt,
+                "neoforge" => updater::Loader::NeoForge,
+                "forge" => updater::Loader::Forge,
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "unknown loader '{other}' (vanilla, fabric, quilt, neoforge, forge)"
+                    ));
+                }
+            };
+            let builds = updater::fetch_loader_builds(&agent, loader_kind, mc, lang)?;
+            let chosen = match build {
+                Some(want) => builds
+                    .into_iter()
+                    .find(|b| b.version == want)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("build '{want}' not found for {mc} (use a version the loader meta lists)")
+                    })?,
+                None => builds
+                    .iter()
+                    .find(|b| b.stable)
+                    .or_else(|| builds.first())
+                    .cloned()
+                    .expect("fetch_loader_builds returns a non-empty list"),
+            };
+            println!(
+                "Installing {} {} for {mc} into {}",
+                loader_kind.label(),
+                chosen.version,
+                root.display()
+            );
+            let outcome =
+                updater::install_loader(&agent, &root, loader_kind, mc, &chosen, lang, &mut progress)?;
+            println!(
+                "Installed {} ({} file(s) downloaded)",
+                outcome.version_id, outcome.downloaded_files
+            );
+        }
     }
     Ok(())
 }

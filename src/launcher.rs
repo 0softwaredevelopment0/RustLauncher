@@ -147,6 +147,27 @@ pub struct LaunchPlan {
     pub working_dir: PathBuf,
 }
 
+/// Required Java major of the parent chain (`inheritsFrom`/`jar`), best
+/// effort: the first parent json that declares `javaVersion.majorVersion`.
+fn parent_required_java_major(game_dir: &Path, version_json: &VersionJson) -> Option<u32> {
+    let mut visited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut next = version_json.parent_id().map(str::to_string);
+    while let Some(id) = next {
+        if !visited.insert(id.clone()) {
+            break;
+        }
+        let path = game_dir.join("versions").join(&id).join(format!("{id}.json"));
+        let Ok(parent) = VersionJson::load(&path) else {
+            break;
+        };
+        if let Some(major) = parent.required_java_major() {
+            return Some(major);
+        }
+        next = parent.parent_id().map(str::to_string);
+    }
+    None
+}
+
 /// Assemble the full launch command for a version.
 #[allow(clippy::too_many_arguments)]
 pub fn build_launch_plan(
@@ -171,8 +192,12 @@ pub fn build_launch_plan(
     // manual edits are checked here.
     crate::jvm::validate_jvm_args(&parsed_args, lang).map_err(|e| anyhow::anyhow!(e))?;
 
-    let required_major = version_json.required_java_major().or(Some(21)).or(None);
-    let required_major = required_major.unwrap_or(21);
+    let required_major = version_json
+        .required_java_major()
+        // Modloader profiles carry no javaVersion of their own; the
+        // requirement comes from the vanilla version they build upon.
+        .or_else(|| parent_required_java_major(game_dir, version_json))
+        .unwrap_or(21);
 
     let java = java_locator::select_java(custom_java_path, Some(required_major), lang)?;
     let java_major = java_locator::selected_java_major(&java, lang)?;
@@ -212,7 +237,19 @@ pub fn build_launch_plan(
     // Module access needed by modloaders on modern JVMs.
     args.extend(module_access_flags(java_major));
 
+    // JVM arguments declared by the profile (NeoForge needs --add-opens /
+    // --add-exports pairs and display switches).
+    if let Some(arguments) = &version_json.arguments {
+        args.extend(arguments.jvm_strings().iter().map(|s| s.to_string()));
+    }
+
     args.push(format!("-Djava.library.path={}", natives_dir.display()));
+    // FML (NeoForge) locates the libraries directory through this property
+    // in production launches.
+    args.push(format!(
+        "-DlibraryDirectory={}",
+        libraries_dir.display()
+    ));
     args.push("-cp".to_string());
     args.push(classpath);
     args.push(version_json.main_class().to_string());
@@ -248,6 +285,11 @@ pub fn build_launch_plan(
     args.push(String::new());
     args.push("--clientId".into());
     args.push(String::new());
+
+    // Game arguments declared by the profile (FML version pins etc.).
+    if let Some(arguments) = &version_json.arguments {
+        args.extend(arguments.game_strings().iter().map(|s| s.to_string()));
+    }
 
     if let Some((width, height)) = resolution {
         args.push("--width".into());

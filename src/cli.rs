@@ -52,4 +52,22 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    /// Install a version from the Mojang catalog or a mod-loader meta.
+    Install {
+        /// Target Minecraft version the loader installs onto ("26.3").
+        #[arg(long, short = 'm')]
+        mc: String,
+
+        /// What to install: vanilla, fabric, quilt, neoforge or forge.
+        #[arg(long, short = 'l', default_value = "vanilla")]
+        loader: String,
+
+        /// Loader build; newest stable when omitted (ignored for vanilla).
+        #[arg(long, short = 'b')]
+        build: Option<String>,
+
+        /// Game directory (required — the launcher will not guess).
+        #[arg(long, short = 'g')]
+        game_dir: String,
+    },
 }

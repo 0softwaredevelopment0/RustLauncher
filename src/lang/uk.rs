@@ -56,6 +56,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "{0} is not available for {1}" => "{0} недоступний для {1}",
         "{0} stopped" => "{0} зупинено",
         "version {0} is required but not installed" => "потрібна версія {0}, але вона не встановлена",
+        "bad {0} installer for {1}" => "пошкоджений установник {0} для {1}",
         "'{0}' will be removed from the launcher. The game directory on disk will NOT be deleted." => "'{0}' буде видалено з лаунчера. Ігровий каталог на диску НЕ буде видалено.",
         "{0}: checksum mismatch (expected {1}, got {2})" => "{0}: невідповідність контрольної суми (очікувалося {1}, отримано {2})",
         "1. Add your nickname in Accounts\n2. Pick a version (install one from the Catalog if needed)\n3. Configure RAM in Settings\n4. Press Play!" => "1. Додайте свій нікнейм у розділі «Акаунти»\n2. Виберіть версію (за потреби встановіть її з каталогу)\n3. Налаштуйте ОЗП у розділі «Налаштування»\n4. Натисніть «Грати»!",
