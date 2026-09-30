@@ -5,6 +5,7 @@
 //! values or unrelated objects and broke on reordering. Here the JSON is
 //! parsed properly with serde and all fields are read structurally.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -76,6 +77,11 @@ pub struct LibraryEntry {
     /// Vanilla-style per-artifact download info.
     #[serde(default)]
     pub downloads: Option<LibraryDownloads>,
+
+    /// Vanilla `natives` map: OS -> classifier name, with `${arch}`
+    /// placeholders (`{"windows": "natives-windows-${arch}"}`).
+    #[serde(default)]
+    pub natives: Option<BTreeMap<String, String>>,
 }
 
 /// Vanilla `downloads` block of a library entry.
@@ -83,6 +89,9 @@ pub struct LibraryEntry {
 pub struct LibraryDownloads {
     #[serde(default)]
     pub artifact: Option<LibraryArtifact>,
+    /// Per-classifier artifacts (natives jars of old-style entries).
+    #[serde(default)]
+    pub classifiers: BTreeMap<String, LibraryArtifact>,
 }
 
 /// Vanilla `downloads.artifact` block: main jar URL and checksum.
@@ -100,6 +109,13 @@ impl LibraryEntry {
     pub fn artifact_download(&self) -> Option<(&str, &str)> {
         let artifact = self.downloads.as_ref()?.artifact.as_ref()?;
         Some((artifact.url.as_str(), artifact.sha1.as_str()))
+    }
+
+    /// The natives classifier for a vanilla-json OS key (`windows`, `osx`,
+    /// `linux`): the declared `natives[os]` name with `${arch}` resolved.
+    pub fn natives_classifier(&self, os: &str) -> Option<String> {
+        let classifier = self.natives.as_ref()?.get(os)?;
+        Some(classifier.replace("${arch}", "64"))
     }
 }
 
@@ -281,6 +297,33 @@ mod tests {
         let bare: VersionJson =
             serde_json::from_str(r#"{"libraries": [{"name": "a:b:1"}]}"#).unwrap();
         assert_eq!(bare.libraries[0].artifact_download(), None);
+    }
+
+    #[test]
+    fn vanilla_natives_classifiers_parse() {
+        let json: VersionJson = serde_json::from_str(
+            r#"{"libraries": [{"name": "tv.twitch:twitch-external-platform:4.5",
+                "natives": {"windows": "natives-windows-${arch}"},
+                "downloads": {"classifiers": {
+                    "natives-windows-64": {
+                        "url": "https://libraries.minecraft.net/tw/natives-windows-64.jar",
+                        "sha1": "cafe"}}}}]}"#,
+        )
+        .unwrap();
+        let lib = &json.libraries[0];
+        assert_eq!(
+            lib.natives_classifier("windows").as_deref(),
+            Some("natives-windows-64")
+        );
+        assert_eq!(lib.natives_classifier("linux"), None);
+        let classifier = lib
+            .downloads
+            .as_ref()
+            .unwrap()
+            .classifiers
+            .get("natives-windows-64")
+            .unwrap();
+        assert_eq!(classifier.sha1, "cafe");
     }
 
     #[test]

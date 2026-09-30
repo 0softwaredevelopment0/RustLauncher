@@ -303,6 +303,8 @@ struct VersionMeta {
     downloads: BTreeMap<String, DownloadInfo>,
     #[serde(default)]
     assetIndex: Option<AssetIndexInfo>,
+    #[serde(default)]
+    libraries: Vec<crate::version_json::LibraryEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -424,7 +426,23 @@ pub fn install_version(
         downloaded += 1;
     }
 
-    // 3. asset index + objects
+    // 3. libraries declared by the version json (current-OS natives jars
+    //    included), so the first launch does not have to fetch them
+    let libs_dir = game_dir.join("libraries");
+    let natives = natives_os();
+    let total = meta.libraries.len();
+    for (i, lib) in meta.libraries.iter().enumerate() {
+        download_library_entry(agent, &libs_dir, lib, natives, lang, &mut progress)?;
+        if (i + 1) % 10 == 0 || i + 1 == total {
+            progress(&tr_fmt(
+                lang,
+                "libraries {0}/{1}",
+                &[&(i + 1).to_string(), &total.to_string()],
+            ));
+        }
+    }
+
+    // 4. asset index + objects
     let asset_index = meta
         .assetIndex
         .context(tr(lang, "version metadata has no asset index"))?;
@@ -749,6 +767,53 @@ fn load_installed_version_json(game_dir: &Path, id: &str, lang: Language) -> Res
     VersionJson::load(&path)
 }
 
+/// The vanilla-json OS key for natives classifiers.
+fn natives_os() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "osx"
+    } else {
+        "linux"
+    }
+}
+
+/// Download one version-json library: the main artifact plus, for vanilla
+/// entries that declare per-OS `natives` classifiers, the current OS's
+/// natives jar. Existing files are kept (`fetch_to_file` verifies sha1).
+fn download_library_entry(
+    agent: &ureq::Agent,
+    libs_dir: &Path,
+    lib: &crate::version_json::LibraryEntry,
+    natives_key: &str,
+    lang: Language,
+    progress: &mut dyn FnMut(&str),
+) -> Result<()> {
+    if let Some(dest) = coordinate_to_path(libs_dir, &lib.name) {
+        let url = library_download_url(lib);
+        let sha1 = match lib.artifact_download() {
+            Some((_, sha1)) if !sha1.is_empty() => sha1.to_string(),
+            _ => lib.sha1.clone(),
+        };
+        fetch_to_file(agent, &url, &dest, &sha1, progress, lang)?;
+    }
+    if let Some(classifier) = lib.natives_classifier(natives_key) {
+        let coordinate = format!("{}:{}", lib.name, classifier);
+        if let Some(dest) = coordinate_to_path(libs_dir, &coordinate) {
+            if let Some((url, sha1)) = lib
+                .downloads
+                .as_ref()
+                .and_then(|d| d.classifiers.get(&classifier))
+                .map(|a| (a.url.as_str(), a.sha1.as_str()))
+                .filter(|(url, _)| !url.is_empty())
+            {
+                fetch_to_file(agent, url, &dest, sha1, progress, lang)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Ensure every library declared by the version json and its parent chain
 /// (`inheritsFrom`/`jar`) exists under `<game_dir>/libraries`, downloading
 /// missing jars. Called right before the launch, so a version whose json
@@ -775,6 +840,7 @@ pub fn ensure_version_libraries(
     }
 
     let libs_dir = game_dir.join("libraries");
+    let natives = natives_os();
     let total: usize = jsons.iter().map(|j| j.libraries.len()).sum();
     let mut done = 0usize;
     for version_json in &jsons {
@@ -782,18 +848,10 @@ pub fn ensure_version_libraries(
             done += 1;
             // Malformed coordinates cannot map to a maven path; classpath
             // assembly skips them the same way.
-            let Some(dest) = coordinate_to_path(&libs_dir, &lib.name) else {
-                continue;
-            };
-            if dest.is_file() {
+            if coordinate_to_path(&libs_dir, &lib.name).is_none() {
                 continue;
             }
-            let sha1 = match lib.artifact_download() {
-                Some((_, sha1)) if !sha1.is_empty() => sha1.to_string(),
-                _ => lib.sha1.clone(),
-            };
-            let url = library_download_url(lib);
-            fetch_to_file(agent, &url, &dest, &sha1, progress, lang)?;
+            download_library_entry(agent, &libs_dir, lib, natives, lang, progress)?;
             progress(&tr_fmt(
                 lang,
                 "libraries {0}/{1}",
@@ -1037,7 +1095,9 @@ mod tests {
                     url: "https://libraries.minecraft.net/gson-2.10.1.jar".into(),
                     sha1: "abc".into(),
                 }),
+                classifiers: BTreeMap::new(),
             }),
+            natives: None,
         };
         assert_eq!(
             library_download_url(&with_artifact),
@@ -1049,6 +1109,7 @@ mod tests {
             url: "https://maven.fabricmc.net/".into(),
             sha1: String::new(),
             downloads: None,
+            natives: None,
         };
         assert_eq!(
             library_download_url(&with_repo),
@@ -1060,6 +1121,7 @@ mod tests {
             url: String::new(),
             sha1: String::new(),
             downloads: None,
+            natives: None,
         };
         assert_eq!(
             library_download_url(&bare),
