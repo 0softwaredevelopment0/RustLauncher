@@ -9,9 +9,11 @@
 $ErrorActionPreference = 'Stop'
 $enc = [System.Text.Encoding]::UTF8
 
-# 1. Collect the canonical key set from every tr(lang, "...") / tr_fmt(...).
+# 1. Collect the canonical key set from every tr()/tr_fmt() call. The first
+# argument may be `lang`, a `language` variable, or `settings.language` /
+# `app.settings.language` passed inline.
 $keys = New-Object System.Collections.Generic.HashSet[string]
-$srcPat = 'tr(?:_fmt)?\(\s*lang\s*,\s*"((?:[^"\\]|\\.)*)"'
+$srcPat = 'tr(?:_fmt)?\(\s*(?:app\.)?(?:settings\.)?(?:lang|language)\s*,\s*"((?:[^"\\]|\\.)*)"'
 Get-ChildItem -Path src -Recurse -Filter *.rs |
     Where-Object { $_.DirectoryName -notlike '*\lang' -and $_.Name -ne 'lang.rs' } |
     ForEach-Object {

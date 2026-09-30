@@ -2,6 +2,10 @@
 
 pub fn get(key: &str) -> Option<&'static str> {
     Some(match key {
+        "Launching {0} with {1}" => "Запуск {0} через {1}",
+        "log file failed: {0}" => "ошибка файла журнала: {0}",
+        "running…" => "выполняется…",
+        "Waiting for all tests to finish…" => "Ожидание завершения всех тестов…",
         "(latest release)" => "(последний релиз)",
         "(running)" => "(запущен)",
         "... {0} more hidden" => "... ещё {0} скрыто",
@@ -101,7 +105,6 @@ pub fn get(key: &str) -> Option<&'static str> {
         "Dark" => "Тёмная",
         "Dark base" => "Тёмная основа",
         "Data Packs" => "Наборы данных",
-        "Default (auto-detect)" => "По умолчанию (автоопределение)",
         "Delete" => "Удалить",
         "Delete this instance?" => "Удалить эту сборку?",
         "Diagnostics" => "Диагностика",
@@ -178,7 +181,6 @@ pub fn get(key: &str) -> Option<&'static str> {
         "How to get started" => "Как начать",
         "HTTP {0} ({1})" => "HTTP {0} ({1})",
         "HTTP {0} streamed ({1})" => "HTTP {0} поток ({1})",
-        "HTTP {0} (streamed)" => "HTTP {0} (потоково)",
         "HTTP {0} for {1}" => "HTTP {0} для {1}",
         "HTTP {0} from Ely.by" => "HTTP {0} от Ely.by",
         "Image" => "Изображение",
