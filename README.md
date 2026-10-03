@@ -2,6 +2,8 @@
 
 A fast, native Minecraft launcher written in Rust.
 
+![Latest release](https://img.shields.io/github/v/release/0softwaredevelopment0/RustLauncher)
+
 ## Features
 
 - **GUI** (eframe/egui): General, Console, Instances, Versions, Servers,
