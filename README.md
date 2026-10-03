@@ -2,8 +2,6 @@
 
 A fast, native Minecraft launcher written in Rust.
 
-![status](https://img.shields.io/badge/status-beta-orange)
-
 ## Features
 
 - **GUI** (eframe/egui): General, Console, Instances, Versions, Servers,
