@@ -54,42 +54,57 @@ A fast, native Minecraft launcher written in Rust.
 
 ```
 src/
-├── main.rs           — entry point: CLI dispatch, GUI bootstrap
-├── cli.rs            — clap definitions for the scripting subcommands
-├── db.rs             — Argon2id password DB for offline accounts
-├── gui/              — the eframe/egui interface
-│   ├── mod.rs        — module docs and wiring
-│   ├── state.rs      — App state, shared types, version model
-│   ├── freestanding.rs — version merge/sort/filter, process plumbing
-│   ├── screens.rs    — General / Console / Instances / Versions /
-│   │                   Servers / Accounts / Skins
-│   ├── content_ui.rs — the Modrinth browser
-│   ├── toast_ui.rs   — notification stack and painter icons
-│   ├── app.rs        — frame loop, navigation, confirmation dialogs
-│   └── tests.rs      — GUI unit tests
-├── accounts.rs       — account store (Offline / Ely.by / Mojang)
-├── auth.rs           — offline, Ely.by and Microsoft authentication
-├── classpath.rs      — classpath assembly with dedup
-├── content.rs        — Modrinth API client and downloads
-├── diagnostics.rs    — DNS/HTTP/TCP checks
-├── home.rs           — launcher home layout (portable)
-├── icons.rs          — embedded Material Icons font
-├── instances.rs      — instance registry (instances.json)
-├── java_locator.rs   — installed JDK/JRE discovery
-├── jvm.rs            — JVM flag presets and validation
-├── launcher.rs       — launch plan construction
-├── logs.rs           — session logs
-├── nbt.rs            — NBT read/write for servers.dat
-├── net.rs            — HTTP agent
-├── news.rs           — news feed
-├── notifications.rs  — toast model (aging, countdown, expand)
-├── profiles.rs       — named settings snapshots
-├── servers.rs        — servers.dat NBT merge + status probe
-├── settings.rs       — typed settings (config.json)
-├── skins.rs          — skin download/import/preview
-├── updater.rs        — Mojang manifest + loader manifests
-├── version.rs        — local version discovery
-└── version_json.rs   — version JSON → launch plan inputs
+├── main.rs             — entry point: CLI dispatch, GUI bootstrap
+├── cli.rs              — clap definitions for the scripting subcommands
+├── game/               — the launch pipeline
+│   ├── launcher.rs     — launch plan construction
+│   ├── classpath.rs    — classpath assembly with dedup
+│   ├── jvm.rs          — JVM flag presets and validation
+│   ├── instances.rs    — instance registry (instances.json)
+│   ├── version.rs      — local version discovery
+│   ├── version_json.rs — version JSON → launch plan inputs
+│   └── java/           — locator.rs (JDK/JRE discovery, and download.rs
+│                          for Temurin/Zulu/Corretto runtimes)
+├── account/            — mod.rs re-exports the everyday API
+│   ├── auth.rs         — offline, Ely.by and Microsoft authentication
+│   ├── store.rs        — account store (Offline / Ely.by / Mojang)
+│   └── db.rs           — Argon2id password DB for offline accounts
+├── updater/            — remote discovery and installation
+│   ├── mod.rs          — Mojang manifest, SHA-1 + download helpers
+│   ├── loaders.rs      — Fabric/Quilt/NeoForge/Forge build discovery
+│   ├── vanilla.rs      — vanilla version install (client jar + assets)
+│   ├── loader_install.rs — mod loader installation
+│   └── libraries.rs    — Maven library resolution shared by installers
+├── content/            — mod platform
+│   ├── mod.rs          — Modrinth API client and downloads
+│   └── modpack.rs      — .mrpack modpack installation
+├── services/           — launcher feature services
+│   ├── settings.rs     — typed settings (config.json)
+│   ├── servers.rs      — servers.dat NBT merge + status probe
+│   ├── news.rs         — news feed
+│   ├── skins.rs        — skin download/import/preview
+│   ├── diagnostics.rs  — DNS/HTTP/TCP checks
+│   └── notifications.rs — toast model (aging, countdown, expand)
+├── util/               — shared infrastructure
+│   ├── home.rs         — launcher home layout (portable)
+│   ├── logs.rs         — session logs
+│   ├── nbt.rs          — NBT read/write for servers.dat
+│   └── net.rs          — HTTP agent
+├── lang/               — UI translations (ru, de, es, fr, ...)
+└── gui/                — the eframe/egui interface
+    ├── mod.rs          — module docs and wiring
+    ├── state.rs        — App state, shared types, version model
+    ├── app.rs          — frame loop, navigation, confirmation dialogs
+    ├── screens/        — one file per screen: general, instances,
+    │                     versions, servers, accounts, skins, news,
+    │                     settings, diagnostics
+    ├── freestanding/   — App logic by concern: game (launch/stop/kill),
+    │                     console, java, modpack, persistence, toasts,
+    │                     visuals
+    ├── theme/          — fonts.rs (CJK fallback), icons.rs (Material Icons)
+    ├── content_ui.rs   — the Modrinth browser
+    ├── toast_ui.rs     — notification rendering and painter icons
+    └── tests.rs        — GUI unit tests
 ```
 
 ## Build
