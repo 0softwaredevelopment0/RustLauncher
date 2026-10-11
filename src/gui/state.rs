@@ -18,12 +18,58 @@ use crate::logs::SessionLog;
 use crate::news::NewsItem;
 use crate::notifications::Toasts;
 use crate::servers::ServerStore;
-use crate::settings::Settings;
+use crate::settings::{ConsoleMode, Settings};
 use crate::updater::{self, Manifest};
 use crate::version::Version;
 
 /// The maximum number of console lines kept in memory.
 pub(crate) const CONSOLE_CAP: usize = 8000;
+
+/// The console buffer behind `Arc<Mutex<…>>`: captures only what the active
+/// [`ConsoleMode`] allows and keeps at most [`CONSOLE_CAP`] lines. The mode
+/// lives in the buffer itself because worker threads (game output drains,
+/// install progress) push into cloned handles without access to the
+/// settings — the filter is applied at capture time, so a rejected line is
+/// never stored. The UI syncs the current mode into every live buffer each
+/// frame (`App::sync_console_modes`).
+pub struct ConsoleBuffer {
+    lines: Vec<String>,
+    mode: ConsoleMode,
+}
+
+impl ConsoleBuffer {
+    pub fn new(mode: ConsoleMode) -> Self {
+        Self {
+            lines: Vec::new(),
+            mode,
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: ConsoleMode) {
+        self.mode = mode;
+    }
+
+    /// Append a line if the current mode allows it, trimming the buffer to
+    /// [`CONSOLE_CAP`] entries.
+    pub fn push(&mut self, line: String) {
+        if !self.mode.allows(&line) {
+            return;
+        }
+        self.lines.push(line);
+        let excess = self.lines.len().saturating_sub(CONSOLE_CAP);
+        if excess > 0 {
+            self.lines.drain(..excess);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.lines.clear();
+    }
+
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+}
 
 /// A deferred UI mutation produced by a background thread.
 pub(crate) type Job = Box<dyn FnOnce(&mut App) + Send>;
@@ -502,7 +548,7 @@ pub struct App {
 
     // Game process (the single-instance legacy fields are kept for the
     // most-recently-started game: General tab status and Console selection).
-    pub console: Arc<Mutex<Vec<String>>>,
+    pub console: Arc<Mutex<ConsoleBuffer>>,
     pub console_seq: usize,
     /// Text typed in the Console command line, waiting to be sent.
     pub console_input: String,
@@ -677,7 +723,7 @@ pub struct RunningGame {
     /// Version launched.
     pub version: String,
     /// Live console of this particular game.
-    pub console: Arc<Mutex<Vec<String>>>,
+    pub console: Arc<Mutex<ConsoleBuffer>>,
     /// True while the game process is alive (cleared by the worker thread).
     pub running: Arc<AtomicBool>,
     /// The game's java PID for Stop/Kill.
@@ -891,4 +937,41 @@ pub fn merge_versions(local: &[Version], manifest: Option<&Manifest>) -> Vec<Ver
         }
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_buffer_filters_and_caps_at_capture_time() {
+        let mut buf = ConsoleBuffer::new(ConsoleMode::Nothing);
+        // The exact shapes that used to bypass the Nothing mode.
+        buf.push("[RustLauncher] Launching fabric-loader-0.19.5-26.3 with java.exe".into());
+        buf.push("[RustLauncher] libraries 121/121".into());
+        buf.push("[ERROR GAME-EXIT] Vanilla Perfected 26.3 exited with code -8".into());
+        buf.push("game output line".into());
+        assert!(
+            buf.lines().is_empty(),
+            "Nothing must not log anything, got {:?}",
+            buf.lines()
+        );
+
+        buf.set_mode(ConsoleMode::Errors);
+        buf.push("[RustLauncher] libraries 121/121".into());
+        buf.push("[ERROR GAME-EXIT] exited with code -8".into());
+        assert_eq!(buf.lines().len(), 1);
+        assert_eq!(buf.lines()[0], "[ERROR GAME-EXIT] exited with code -8");
+
+        buf.set_mode(ConsoleMode::All);
+        for i in 0..(CONSOLE_CAP + 10) {
+            buf.push(format!("line {i}"));
+        }
+        assert_eq!(buf.lines().len(), CONSOLE_CAP);
+        assert_eq!(buf.lines()[0], "line 10");
+        assert_eq!(buf.lines().last().unwrap(), &format!("line {}", CONSOLE_CAP + 9));
+
+        buf.clear();
+        assert!(buf.lines().is_empty());
+    }
 }

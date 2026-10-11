@@ -12,8 +12,10 @@ use crate::home;
 use crate::jvm;
 use crate::lang::Language;
 
-/// How much of the game output the Console tab displays (display filter
-/// only — it does not affect what is written to the log files).
+/// What the console captures: launcher's own `[RustLauncher] …` lines and
+/// game output are filtered by the SAME markers, and a rejected line is
+/// never stored — this is a logging mode, not a display filter (the log
+/// FILES have their own independent `FileLogMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ConsoleMode {
     /// Every line.
@@ -25,7 +27,7 @@ pub enum ConsoleMode {
     Errors,
     /// Errors plus warnings.
     ErrorsAndWarnings,
-    /// No game output at all (launcher messages still show).
+    /// No output at all — nothing is logged, launcher or game.
     Nothing,
 }
 
@@ -49,16 +51,10 @@ impl ConsoleMode {
         }
     }
 
-    /// Whether a line should be shown: the launcher's own `[RustLauncher]`
-    /// lines always pass, game output is filtered by the mode.
-    pub fn allows_launcher_aware(&self, line: &str) -> bool {
-        if line.starts_with("[RustLauncher]") || line.starts_with("[ERROR ") {
-            return true;
-        }
-        self.allows(line)
-    }
-
-    /// Whether a game-output line should be shown under this mode.
+    /// Whether a line should be logged under this mode. The same marker
+    /// filter applies to every line — the launcher's own `[RustLauncher] …`
+    /// and `[ERROR …]` lines do not bypass it (under `Nothing` nothing is
+    /// logged at all).
     pub fn allows(&self, line: &str) -> bool {
         match self {
             ConsoleMode::All => true,
@@ -668,18 +664,37 @@ mod tests {
         let err = "java.lang.RuntimeException: boom";
         let warn = "[12:00] WARN: low disk space";
         let plain = "Rendering world chunk 42";
+        // The launcher's own lines obey the mode like everything else —
+        // these exact shapes used to bypass the Nothing mode.
+        let launcher_meta = "[RustLauncher] Launching fabric-loader-0.19.5-26.3 with java.exe";
+        let launcher_progress = "[RustLauncher] libraries 121/121";
+        let launcher_error = "[ERROR GAME-EXIT] Vanilla Perfected 26.3 exited with code -8";
         assert!(ConsoleMode::All.allows(err));
         assert!(ConsoleMode::All.allows(plain));
+        assert!(ConsoleMode::All.allows(launcher_meta));
+        assert!(ConsoleMode::All.allows(launcher_progress));
+        assert!(ConsoleMode::All.allows(launcher_error));
         assert!(ConsoleMode::Warnings.allows(warn));
         assert!(!ConsoleMode::Warnings.allows(err));
         assert!(!ConsoleMode::Warnings.allows(plain));
+        assert!(!ConsoleMode::Warnings.allows(launcher_meta));
+        assert!(!ConsoleMode::Warnings.allows(launcher_progress));
+        assert!(!ConsoleMode::Warnings.allows(launcher_error));
         assert!(ConsoleMode::Errors.allows(err));
         assert!(!ConsoleMode::Errors.allows(warn));
         assert!(!ConsoleMode::Errors.allows(plain));
+        assert!(!ConsoleMode::Errors.allows(launcher_meta));
+        assert!(!ConsoleMode::Errors.allows(launcher_progress));
+        assert!(ConsoleMode::Errors.allows(launcher_error));
         assert!(ConsoleMode::ErrorsAndWarnings.allows(err));
         assert!(ConsoleMode::ErrorsAndWarnings.allows(warn));
         assert!(!ConsoleMode::ErrorsAndWarnings.allows(plain));
+        assert!(ConsoleMode::ErrorsAndWarnings.allows(launcher_error));
+        // Nothing logs nothing — launcher meta included.
         assert!(!ConsoleMode::Nothing.allows(err));
+        assert!(!ConsoleMode::Nothing.allows(launcher_meta));
+        assert!(!ConsoleMode::Nothing.allows(launcher_progress));
+        assert!(!ConsoleMode::Nothing.allows(launcher_error));
     }
 
     #[test]

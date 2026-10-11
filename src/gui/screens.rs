@@ -197,9 +197,10 @@ impl App {
                         }
                     });
             }
-            // How much of the game output to display in the console
-            // (display filter only — log files are configured in Settings).
-            ui.label(tr(lang, "Show in console:"));
+            // What the console logs: launcher's own lines and game output
+            // alike, applied at capture time (a rejected line is never
+            // stored). Log FILES are configured in Settings.
+            ui.label(tr(lang, "Log to console:"));
             egui::ComboBox::from_id_salt("console_mode")
                 .selected_text(self.settings.console_log_mode.label(lang))
                 .width(150.0)
@@ -226,6 +227,7 @@ impl App {
                     .console
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
+                    .lines()
                     .join("\n");
                 ui.output_mut(|o| o.copied_text = text);
             }
@@ -266,17 +268,14 @@ impl App {
 
         let all_lines: Vec<String> = {
             let buf = self.console.lock().unwrap_or_else(|e| e.into_inner());
-            buf.clone()
+            buf.lines().to_vec()
         };
         let changed = all_lines.len() != self.console_seq;
         self.console_seq = all_lines.len();
 
-        // Apply the log mode: launcher's own lines always pass, game output
-        // is filtered by the selected mode.
-        let lines: Vec<&String> = all_lines
-            .iter()
-            .filter(|l| self.settings.console_log_mode.allows_launcher_aware(l))
-            .collect();
+        // Everything in the buffer already passed the logging mode at
+        // capture time — show it as is.
+        let lines: Vec<&String> = all_lines.iter().collect();
 
         egui::ScrollArea::vertical()
             .stick_to_bottom(changed)

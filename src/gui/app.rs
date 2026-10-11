@@ -871,6 +871,9 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.apply_pending_jobs();
+        // The console logging mode is captured into the buffers themselves
+        // (worker threads push without seeing the settings).
+        self.sync_console_modes();
         self.sync_visuals(ctx);
         self.paint_background(ctx);
         self.tick_toasts();

@@ -29,9 +29,8 @@ use crate::version::{self, Version};
 use crate::version_json::VersionJson;
 
 use super::state::{
-    App, ContentUi, IconCache, Job, ProgressLine, RunningGame, Screen, TerminateKind,
+    App, ConsoleBuffer, ContentUi, IconCache, Job, ProgressLine, RunningGame, Screen, TerminateKind,
     VersionFilter, VersionSort,
-    CONSOLE_CAP,
 };
 use super::toast_ui::push_line;
 use super::toast_ui::{draw_warning_triangle, tail_lines, toast_body};
@@ -48,6 +47,7 @@ impl App {
         let servers = ServerStore::load_or_import(&home_dir, &game_dir);
         let versions = version::list_versions(&game_dir).unwrap_or_default();
         let instance_store = instances::InstanceStore::load(&home_dir);
+        let console = Arc::new(Mutex::new(ConsoleBuffer::new(settings.console_log_mode)));
 
         let mut app = App {
             home_dir,
@@ -61,7 +61,7 @@ impl App {
             launch_error: None,
             terminate_confirm: None,
             terminate_dont_ask: false,
-            console: Arc::new(Mutex::new(Vec::new())),
+            console,
             console_seq: 0,
             console_input: String::new(),
             running_games: Vec::new(),
@@ -244,11 +244,27 @@ impl App {
     }
 
     pub(crate) fn log_console(&self, line: impl Into<String>) {
-        let mut console = self.console.lock().unwrap_or_else(|e| e.into_inner());
-        console.push(line.into());
-        let excess = console.len().saturating_sub(CONSOLE_CAP);
-        if excess > 0 {
-            console.drain(..excess);
+        self.console
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(line.into());
+    }
+
+    /// Propagate the current `console_log_mode` into every live console
+    /// buffer. The mode lives in the buffer itself (worker threads push
+    /// without access to the settings), so this runs once per frame and
+    /// catches combo changes, settings resets and new launches alike.
+    pub(crate) fn sync_console_modes(&mut self) {
+        let mode = self.settings.console_log_mode;
+        self.console
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_mode(mode);
+        for game in &self.running_games {
+            game.console
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_mode(mode);
         }
     }
 
@@ -539,7 +555,7 @@ impl App {
         };
         let text = {
             let buf = self.console.lock().unwrap_or_else(|e| e.into_inner());
-            buf.join("\n")
+            buf.lines().join("\n")
         };
         match std::fs::write(&path, text) {
             Ok(()) => {
@@ -814,7 +830,7 @@ impl App {
         };
 
         let settings = self.settings.clone();
-        let console = Arc::new(Mutex::new(Vec::new()));
+        let console = Arc::new(Mutex::new(ConsoleBuffer::new(settings.console_log_mode)));
         let running = Arc::new(AtomicBool::new(false));
         let pid = Arc::new(Mutex::new(None));
         let stdin: Arc<Mutex<Option<std::process::ChildStdin>>> = Arc::new(Mutex::new(None));
@@ -1495,7 +1511,7 @@ pub(crate) fn run_game_process(
     version: &Version,
     account: &auth::Account,
     settings: &Settings,
-    console: Arc<Mutex<Vec<String>>>,
+    console: Arc<Mutex<ConsoleBuffer>>,
     file_log: settings::FileLogMode,
     home_dir: &std::path::Path,
     game_log: Arc<Mutex<Option<SessionLog>>>,
@@ -1581,7 +1597,7 @@ pub(crate) fn run_game_process(
 /// Run the plan, streaming output lines into the console buffer.
 pub(crate) fn spawn_and_stream(
     plan: &LaunchPlan,
-    console: Arc<Mutex<Vec<String>>>,
+    console: Arc<Mutex<ConsoleBuffer>>,
     game_pid: Arc<Mutex<Option<u32>>>,
     game_log: Arc<Mutex<Option<SessionLog>>>,
     file_log: settings::FileLogMode,

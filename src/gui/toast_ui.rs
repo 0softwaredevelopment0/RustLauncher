@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::notifications::{Toast, ToastKind};
 
-use super::state::CONSOLE_CAP;
+use super::state::ConsoleBuffer;
 
 /// Draw one toast card; returns `(close_clicked, body_clicked, size)`.
 // A rendering helper naturally takes the toast's whole drawing context;
@@ -306,13 +306,11 @@ pub(crate) fn tail_lines(path: &std::path::Path, n: usize) -> Option<String> {
     }
 }
 
-pub(crate) fn push_line(console: &Arc<Mutex<Vec<String>>>, line: String) {
-    let mut buf = console.lock().unwrap_or_else(|e| e.into_inner());
-    buf.push(line);
-    let excess = buf.len().saturating_sub(CONSOLE_CAP);
-    if excess > 0 {
-        buf.drain(..excess);
-    }
+pub(crate) fn push_line(console: &Arc<Mutex<ConsoleBuffer>>, line: String) {
+    console
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(line);
 }
 
 /// Draw a material-style warning triangle (yellow fill, black exclamation
