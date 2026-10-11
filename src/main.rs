@@ -25,6 +25,7 @@ mod jvm;
 mod lang;
 mod launcher;
 mod logs;
+mod modpack;
 mod nbt;
 mod net;
 mod news;
