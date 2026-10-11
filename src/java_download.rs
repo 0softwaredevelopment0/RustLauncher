@@ -477,6 +477,8 @@ fn find_java_exe(dir: &Path) -> Option<PathBuf> {
 /// Download and unpack a runtime, returning the path to its `java` executable.
 /// The result is idempotent: an already-installed (edition, sub-version) is
 /// returned as-is instead of downloading again.
+///
+/// `progress` reports the download (exact byte fraction) and the unpack step.
 pub fn install_runtime(
     agent: &ureq::Agent,
     lang: Language,
@@ -484,6 +486,7 @@ pub fn install_runtime(
     major: u32,
     sub: &str,
     runtimes_dir: &Path,
+    progress: &dyn Fn(&str, Option<f32>),
 ) -> Result<PathBuf> {
     let dest = runtime_dest(runtimes_dir, edition_id, sub);
     if let Some(java) = find_java_exe(&dest) {
@@ -491,15 +494,34 @@ pub fn install_runtime(
     }
 
     let url = resolve_url(agent, lang, edition_id, major, sub)?;
-    let bytes = net::get_bytes(agent, &url, lang)?;
+    let label = format!(
+        "{} {} {}",
+        find_edition(edition_id)
+            .map(|e| e.label)
+            .unwrap_or(edition_id),
+        major,
+        sub
+    );
+    progress(&format!("{} — download", label), Some(0.0));
+    let mut on_bytes = |done: u64, total: u64| {
+        let frac = if total > 0 {
+            Some(done as f32 / total as f32)
+        } else {
+            None
+        };
+        progress(&format!("{} — download", label), frac.map(|f| 0.95 * f));
+    };
+    let bytes = net::get_bytes_progress(agent, &url, lang, &mut on_bytes)?;
     if bytes.len() < 1024 {
         return Err(anyhow!(
             "download from {url} is suspiciously small ({} bytes)",
             bytes.len()
         ));
     }
+    progress(&format!("{} — unpack", label), Some(0.97));
     std::fs::create_dir_all(&dest)?;
     extract_zip(&bytes, &dest)?;
+    progress(&format!("{} — unpack", label), Some(1.0));
 
     find_java_exe(&dest).ok_or_else(|| {
         anyhow!(

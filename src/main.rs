@@ -156,7 +156,11 @@ fn cmd_install(mc: &str, loader: &str, build: Option<&str>, game_dir: &str) -> R
     }
     let agent = net::agent();
     let lang = lang::Language::English;
-    let mut progress = |msg: &str| println!("  {msg}");
+    // CLI twin of the GUI progress line: message plus a percentage tail.
+    let mut progress = |msg: &str, frac: Option<f32>| match frac {
+        Some(f) => println!("  {} [{}/100%]", msg, (f.clamp(0.0, 1.0) * 100.0) as i32),
+        None => println!("  {msg}"),
+    };
 
     match loader.trim().to_ascii_lowercase().as_str() {
         "vanilla" => {
@@ -302,7 +306,10 @@ fn cmd_launch(
             &root,
             &json,
             lang::Language::English,
-            &mut |msg| println!("  {msg}"),
+            &mut |msg, frac| match frac {
+                Some(f) => println!("  {} [{}/100%]", msg, (f.clamp(0.0, 1.0) * 100.0) as i32),
+                None => println!("  {msg}"),
+            },
         )?;
     }
 

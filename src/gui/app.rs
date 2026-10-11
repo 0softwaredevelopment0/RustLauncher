@@ -699,14 +699,23 @@ impl App {
             });
 
             if let Some((edition, major, sub)) = &self.java_downloading {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.weak(tr_fmt(
+                let progress = self
+                    .java_progress
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                let label = if progress.label.is_empty() {
+                    tr_fmt(
                         lang,
                         "Downloading Java {0} ({1})…",
                         &[&format!("{major} {sub}"), edition],
-                    ));
-                });
+                    )
+                } else {
+                    progress.label.clone()
+                };
+                let mut line = progress;
+                line.label = label;
+                crate::gui::state::ui_progress_line(ui, &line, lang);
             }
             ui.label(
                 egui::RichText::new(tr(
@@ -862,11 +871,13 @@ impl eframe::App for App {
         }
 
         // Repaint while the game runs, an install/download is in progress or
-        // a modpack import is running, so the console and progress labels
-        // keep moving without user input.
+        // a modpack import is running, so the console and progress bars keep
+        // moving without user input.
         let busy = self.any_game_running()
             || self.installing.load(Ordering::SeqCst)
-            || self.modpack_installing;
+            || self.modpack_installing
+            || self.content_downloading
+            || self.java_downloading.is_some();
         if busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }

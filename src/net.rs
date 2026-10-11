@@ -19,6 +19,20 @@ pub fn agent() -> ureq::Agent {
 
 /// GET a URL and return the body as bytes with helpful error classification.
 pub fn get_bytes(agent: &ureq::Agent, url: &str, lang: Language) -> Result<Vec<u8>> {
+    get_bytes_progress(agent, url, lang, &mut |_, _| {})
+}
+
+/// GET a URL, buffering the body while reporting download progress.
+///
+/// `on_progress` receives `(bytes read so far, total bytes)` per chunk;
+/// `total` is `0` when the server sends no `Content-Length` (the fraction
+/// is then unknown and callers fall back to a spinner).
+pub fn get_bytes_progress(
+    agent: &ureq::Agent,
+    url: &str,
+    lang: Language,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> Result<Vec<u8>> {
     let response = agent.get(url).call().map_err(|e| classify(e, lang))?;
     let status = response.status();
     if status != 200 {
@@ -27,12 +41,24 @@ pub fn get_bytes(agent: &ureq::Agent, url: &str, lang: Language) -> Result<Vec<u
             tr_fmt(lang, "HTTP {0} for {1}", &[&status.to_string(), url])
         ));
     }
+    let total = response
+        .header("Content-Length")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
     let reader = response.into_reader();
     let mut limited = reader.take(512 * 1024 * 1024);
     let mut buf = Vec::new();
-    limited
-        .read_to_end(&mut buf)
-        .with_context(|| tr_fmt(lang, "failed to read body of {0}", &[url]))?;
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = limited
+            .read(&mut chunk)
+            .with_context(|| tr_fmt(lang, "failed to read body of {0}", &[url]))?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        on_progress(buf.len() as u64, total);
+    }
     Ok(buf)
 }
 

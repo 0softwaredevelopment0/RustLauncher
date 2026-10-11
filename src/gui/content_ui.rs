@@ -85,8 +85,8 @@ impl App {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if installing && !progress.is_empty() {
-            ui.label(&progress);
+        if installing {
+            crate::gui::state::ui_progress_line(ui, &progress, lang);
         }
         ui.separator();
 
@@ -653,11 +653,14 @@ impl App {
     ) {
         let lang = self.settings.language;
         self.content_downloading = true;
-        *self
-            .content_progress
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            tr_fmt(lang, "downloading {0}…", &[&file.file_name]);
+        {
+            let mut p = self
+                .content_progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            p.label = tr_fmt(lang, "downloading {0}…", &[&file.file_name]);
+            p.frac = Some(0.0);
+        }
         let game_dir = self.active_game_dir();
         // Data packs, shaders, plugins and server jars land in the user's
         // Downloads folder; mods and resource packs go into the game dir.
@@ -671,8 +674,15 @@ impl App {
         self.spawn_job(
             move || {
                 let agent = crate::net::agent();
-                let result = content::download_file(&agent, &game_dir, kind, &file, lang);
-                progress.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                let result = content::download_file(&agent, &game_dir, kind, &file, lang, &|done, total| {
+                    let frac = if total > 0 { Some(done as f32 / total as f32) } else { None };
+                    let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                    p.frac = frac;
+                });
+                {
+                    let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                    p.frac = Some(1.0);
+                }
                 result.map_err(|e| e.to_string())
             },
             move |app, result| {

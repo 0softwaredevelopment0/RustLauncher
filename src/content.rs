@@ -650,17 +650,21 @@ fn urlquery(s: &str) -> String {
 /// Download a content file into `game_dir/<dest>/[<subdir>]`. Returns the
 /// path of the saved file. World zips are extracted into
 /// `saves/<zip-stem>/` so the world appears directly in the world list.
+/// `on_bytes` reports `(read so far, total)` while the file streams in.
 pub fn download_file(
     agent: &ureq::Agent,
     game_dir: &Path,
     kind: ContentKind,
     file: &ContentFile,
     lang: Language,
+    on_bytes: &dyn Fn(u64, u64),
 ) -> Result<std::path::PathBuf> {
     if file.url.is_empty() {
         return Err(anyhow!("{}", tr(lang, "the file has no download URL")));
     }
-    let bytes = net::get_bytes(agent, &file.url, lang)?;
+    let bytes = net::get_bytes_progress(agent, &file.url, lang, &mut |done, total| {
+        on_bytes(done, total)
+    })?;
     let file_name = if file.file_name.is_empty() {
         // Derive from the URL tail.
         file.url

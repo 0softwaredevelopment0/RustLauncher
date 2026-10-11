@@ -383,7 +383,7 @@ fn fetch_to_file(
     url: &str,
     dest: &Path,
     sha1: &str,
-    progress: &mut dyn FnMut(&str),
+    progress: &mut dyn FnMut(&str, Option<f32>),
     lang: Language,
 ) -> Result<bool> {
     if let Ok(existing) = std::fs::read(dest) {
@@ -399,8 +399,32 @@ fn fetch_to_file(
     let tmp = dest.with_extension("tmp");
     std::fs::write(&tmp, &bytes)?;
     std::fs::rename(&tmp, dest)?;
-    progress(&dest.file_name().unwrap_or_default().to_string_lossy());
+    progress(&dest.file_name().unwrap_or_default().to_string_lossy(), None);
     Ok(true)
+}
+
+/// Stream-download the client jar with byte progress, verify its SHA-1 and
+/// place it atomically. The jar is the biggest single file of a version
+/// install, so it is the only one worth a live byte fraction.
+fn fetch_client_jar(
+    agent: &ureq::Agent,
+    url: &str,
+    dest: &Path,
+    sha1: &str,
+    on_bytes: &mut dyn FnMut(u64, u64),
+    lang: Language,
+) -> Result<()> {
+    let bytes = net::get_bytes_progress(agent, url, lang, &mut |done, total| {
+        on_bytes(done, total)
+    })?;
+    verify_sha1(&bytes, sha1, &format!("{url} (downloaded)"), lang)?;
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = dest.with_extension("tmp");
+    std::fs::write(&tmp, &bytes)?;
+    std::fs::rename(&tmp, dest)?;
+    Ok(())
 }
 
 /// Everything needed to install one version.
@@ -412,12 +436,16 @@ pub struct InstallOutcome {
 /// Install a Minecraft version into `game_dir` (vanilla layout:
 /// `versions/<id>/<id>.{json,jar}`, `assets/indexes/<idx>.json`,
 /// `assets/objects/<h[:2]>/<h>`).
+///
+/// Progress is `(label, fraction)`: the asset index is fetched first so the
+/// total unit count (jar + libraries + asset objects) is known upfront and
+/// the fraction is exact; the jar contributes its live byte fraction.
 pub fn install_version(
     agent: &ureq::Agent,
     game_dir: &Path,
     version: &ManifestVersion,
     lang: Language,
-    mut progress: &mut dyn FnMut(&str),
+    mut progress: &mut dyn FnMut(&str, Option<f32>),
 ) -> Result<InstallOutcome> {
     let id = &version.id;
     let version_dir = game_dir.join("versions").join(id);
@@ -430,36 +458,8 @@ pub fn install_version(
     let json_path = version_dir.join(format!("{id}.json"));
     std::fs::write(&json_path, &meta_bytes)?;
 
-    // 2. client jar
-    let jar = meta.downloads.get("client").ok_or_else(|| {
-        anyhow!(
-            "{}",
-            tr_fmt(lang, "version {0} has no client download", &[id])
-        )
-    })?;
-    let jar_path = version_dir.join(format!("{id}.jar"));
-    let mut downloaded = 0usize;
-    if fetch_to_file(agent, &jar.url, &jar_path, &jar.sha1, &mut progress, lang)? {
-        downloaded += 1;
-    }
-
-    // 3. libraries declared by the version json (current-OS natives jars
-    //    included), so the first launch does not have to fetch them
-    let libs_dir = game_dir.join("libraries");
-    let natives = natives_os();
-    let total = meta.libraries.len();
-    for (i, lib) in meta.libraries.iter().enumerate() {
-        download_library_entry(agent, &libs_dir, lib, natives, lang, &mut progress)?;
-        if (i + 1) % 10 == 0 || i + 1 == total {
-            progress(&tr_fmt(
-                lang,
-                "libraries {0}/{1}",
-                &[&(i + 1).to_string(), &total.to_string()],
-            ));
-        }
-    }
-
-    // 4. asset index + objects
+    // 2. asset index (fetched early: its object count is the denominator of
+    //    the progress fraction)
     let asset_index = meta
         .assetIndex
         .context(tr(lang, "version metadata has no asset index"))?;
@@ -478,9 +478,69 @@ pub fn install_version(
     let index: AssetIndex = serde_json::from_slice(&index_bytes)
         .context(tr(lang, "failed to parse the asset index"))?;
 
+    // Units: the client jar (driven by its own byte fraction) plus one unit
+    // per library and per asset object.
+    let total_units = 1.0f32 + meta.libraries.len() as f32 + index.objects.len() as f32;
+    let frac = |done_units: f32| Some(done_units / total_units);
+    let mut done_units = 0.0f32;
+
+    // 3. client jar (streamed — the largest single download)
+    let jar = meta.downloads.get("client").ok_or_else(|| {
+        anyhow!(
+            "{}",
+            tr_fmt(lang, "version {0} has no client download", &[id])
+        )
+    })?;
+    let jar_path = version_dir.join(format!("{id}.jar"));
+    let mut downloaded = 0usize;
+    {
+        let dl_label = tr_fmt(lang, "Downloading {0}", &[id]);
+        fetch_client_jar(
+            agent,
+            &jar.url,
+            &jar_path,
+            &jar.sha1,
+            &mut |bytes_done: u64, bytes_total: u64| {
+                let inner = if bytes_total > 0 {
+                    bytes_done as f32 / bytes_total as f32
+                } else {
+                    0.0
+                };
+                progress(&dl_label, frac(done_units + inner));
+            },
+            lang,
+        )?;
+        done_units += 1.0;
+        downloaded += 1;
+    }
+
+    // 4. libraries declared by the version json (current-OS natives jars
+    //    included), so the first launch does not have to fetch them
+    let libs_dir = game_dir.join("libraries");
+    let natives = natives_os();
+    let total = meta.libraries.len();
+    for (i, lib) in meta.libraries.iter().enumerate() {
+        download_library_entry(agent, &libs_dir, lib, natives, lang, &mut progress)?;
+        done_units += 1.0;
+        if (i + 1) % 10 == 0 || i + 1 == total {
+            progress(
+                &tr_fmt(
+                    lang,
+                    "libraries {0}/{1}",
+                    &[&(i + 1).to_string(), &total.to_string()],
+                ),
+                frac(done_units),
+            );
+        }
+    }
+
+    // 5. asset objects
     let objects_dir = game_dir.join("assets").join("objects");
     let total = index.objects.len();
-    progress(&tr_fmt(lang, "assets 0/{0}", &[&total.to_string()]));
+    progress(
+        &tr_fmt(lang, "assets 0/{0}", &[&total.to_string()]),
+        frac(done_units),
+    );
     for (i, (name, object)) in index.objects.iter().enumerate() {
         let hash = object.hash.to_lowercase();
         let dest = objects_dir.join(&hash[..2]).join(&hash);
@@ -493,12 +553,16 @@ pub fn install_version(
         if fetch_to_file(agent, &url, &dest, &hash, &mut progress, lang)? {
             downloaded += 1;
         }
+        done_units += 1.0;
         if (i + 1) % 200 == 0 || i + 1 == total {
-            progress(&tr_fmt(
-                lang,
-                "assets {0}/{1}",
-                &[&(i + 1).to_string(), &total.to_string()],
-            ));
+            progress(
+                &tr_fmt(
+                    lang,
+                    "assets {0}/{1}",
+                    &[&(i + 1).to_string(), &total.to_string()],
+                ),
+                frac(done_units),
+            );
         }
     }
 
@@ -588,7 +652,7 @@ pub fn install_loader(
     mc: &str,
     build: &LoaderBuild,
     lang: Language,
-    mut progress: &mut dyn FnMut(&str),
+    mut progress: &mut dyn FnMut(&str, Option<f32>),
 ) -> Result<InstallOutcome> {
     let version_id = match loader {
         Loader::Fabric => format!("fabric-loader-{}-{mc}", build.version),
@@ -637,11 +701,14 @@ pub fn install_loader(
                     downloaded += 1;
                 }
                 if (i + 1) % 10 == 0 || i + 1 == total {
-                    progress(&tr_fmt(
-                        lang,
-                        "libraries {0}/{1}",
-                        &[&(i + 1).to_string(), &total.to_string()],
-                    ));
+                    progress(
+                        &tr_fmt(
+                            lang,
+                            "libraries {0}/{1}",
+                            &[&(i + 1).to_string(), &total.to_string()],
+                        ),
+                        Some((i + 1) as f32 / total as f32),
+                    );
                 }
             }
 
@@ -689,18 +756,21 @@ pub fn install_loader(
                 downloaded += 1;
             }
             let natives = natives_os();
-            for lib in &meta.libraries {
+            for (i, lib) in meta.libraries.iter().enumerate() {
                 if coordinate_to_path(&libs_dir, &lib.name).is_none() {
                     continue;
                 }
                 download_library_entry(agent, &libs_dir, lib, natives, lang, &mut progress)?;
                 downloaded += 1;
+                progress(
+                    &tr_fmt(
+                        lang,
+                        "libraries {0}/{1}",
+                        &[&(i + 1).to_string(), &meta.libraries.len().to_string()],
+                    ),
+                    Some((i + 1) as f32 / meta.libraries.len() as f32),
+                );
             }
-            progress(&tr_fmt(
-                lang,
-                "libraries {0}/{1}",
-                &[&meta.libraries.len().to_string(), &meta.libraries.len().to_string()],
-            ));
 
             // Rewrite the metadata into our version entry: our id, and the
             // parent reference guaranteed to resolve.
@@ -749,7 +819,10 @@ pub fn install_loader(
         }
     }
 
-    progress(&tr_fmt(lang, "{0} installed", &[&version_id]));
+    progress(
+        &tr_fmt(lang, "{0} installed", &[&version_id]),
+        Some(1.0),
+    );
     Ok(InstallOutcome {
         version_id,
         downloaded_files: downloaded,
@@ -863,7 +936,7 @@ fn download_library_entry(
     lib: &crate::version_json::LibraryEntry,
     natives_key: &str,
     lang: Language,
-    progress: &mut dyn FnMut(&str),
+    progress: &mut dyn FnMut(&str, Option<f32>),
 ) -> Result<()> {
     if let Some(dest) = coordinate_to_path(libs_dir, &lib.name) {
         let url = library_download_url(lib);
@@ -900,7 +973,7 @@ pub fn ensure_version_libraries(
     game_dir: &Path,
     json: &VersionJson,
     lang: Language,
-    progress: &mut dyn FnMut(&str),
+    progress: &mut dyn FnMut(&str, Option<f32>),
 ) -> Result<()> {
     // Parent chain, child first; `visited` guards against cycles.
     let mut jsons: Vec<VersionJson> = vec![json.clone()];
@@ -928,11 +1001,14 @@ pub fn ensure_version_libraries(
                 continue;
             }
             download_library_entry(agent, &libs_dir, lib, natives, lang, progress)?;
-            progress(&tr_fmt(
-                lang,
-                "libraries {0}/{1}",
-                &[&done.to_string(), &total.to_string()],
-            ));
+            progress(
+                &tr_fmt(
+                    lang,
+                    "libraries {0}/{1}",
+                    &[&done.to_string(), &total.to_string()],
+                ),
+                Some(done as f32 / total as f32),
+            );
         }
     }
     Ok(())

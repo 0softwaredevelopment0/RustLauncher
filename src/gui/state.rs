@@ -28,6 +28,46 @@ pub(crate) const CONSOLE_CAP: usize = 8000;
 /// A deferred UI mutation produced by a background thread.
 pub(crate) type Job = Box<dyn FnOnce(&mut App) + Send>;
 
+/// Shared download/install progress: a label plus an optional fraction
+/// (`None` = indeterminate, rendered as a spinner instead of a bar).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProgressLine {
+    pub label: String,
+    /// 0.0..=1.0 of the whole flow.
+    pub frac: Option<f32>,
+}
+
+/// Progress shared between a worker thread and the UI thread.
+pub(crate) type SharedProgress = Arc<Mutex<ProgressLine>>;
+
+/// Render one progress line: label, then a bar with the `X/100%` marker to
+/// its right — or a spinner when the fraction is unknown.
+pub(crate) fn ui_progress_line(ui: &mut egui::Ui, p: &ProgressLine, lang: crate::lang::Language) {
+    if !p.label.is_empty() {
+        ui.label(&p.label);
+    }
+    match p.frac {
+        Some(frac) => {
+            let frac = frac.clamp(0.0, 1.0);
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::ProgressBar::new(frac)
+                        .animate(true)
+                        .desired_height(16.0)
+                        .desired_width(220.0),
+                );
+                ui.monospace(format!("{}/100%", (frac * 100.0) as i32));
+            });
+        }
+        None => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(crate::lang::tr(lang, "working…"));
+            });
+        }
+    }
+}
+
 /// Cached loader builds for one (loader, mc-version) pair.
 pub(crate) type LoaderBuildsCache =
     BTreeMap<(updater::Loader, String), Option<Result<Vec<updater::LoaderBuild>, String>>>;
@@ -483,7 +523,7 @@ pub struct App {
     /// A modpack import is running in the background.
     pub modpack_installing: bool,
     /// Human-readable install progress (steps + per-file counters).
-    pub modpack_progress: Arc<Mutex<String>>,
+    pub modpack_progress: SharedProgress,
     /// Instance selected on the General tab for the Play button.
     pub launch_instance: String,
     /// A Stop/Kill confirmation for a specific running instance, keyed by the
@@ -500,7 +540,7 @@ pub struct App {
     /// The order of the version list.
     pub version_sort: VersionSort,
     pub version_search: String,
-    pub install_progress: Arc<Mutex<String>>,
+    pub install_progress: SharedProgress,
     pub installing: Arc<AtomicBool>,
     /// Mod loader selected in the Versions tab.
     pub loader_pick: updater::Loader,
@@ -518,7 +558,7 @@ pub struct App {
     // Mod-platform tab (Modrinth).
     pub(crate) modrinth: ContentUi,
     pub(crate) content_downloading: bool,
-    pub(crate) content_progress: Arc<Mutex<String>>,
+    pub(crate) content_progress: SharedProgress,
     /// The MC version filter for content searches (empty = any).
     pub content_mc_filter: String,
     /// Shared texture cache of project icons (keyed by icon URL).
@@ -583,6 +623,8 @@ pub struct App {
     pub java_dl_sub: Option<String>,
     /// A runtime download in flight: (edition id, major, sub label).
     pub(crate) java_downloading: Option<(String, u32, String)>,
+    /// Live progress of the runtime download (bar + percentage).
+    pub(crate) java_progress: SharedProgress,
     /// Whether the Download Java section is expanded.
     pub java_download_open: bool,
 

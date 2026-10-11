@@ -419,15 +419,12 @@ impl App {
 
             // Live progress of a running modpack import.
             if self.modpack_installing {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    let text = self
-                        .modpack_progress
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .clone();
-                    ui.label(text);
-                });
+                let progress = self
+                    .modpack_progress
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                crate::gui::state::ui_progress_line(ui, &progress, lang);
             }
         });
 
@@ -939,12 +936,7 @@ impl App {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         if installing {
-            ui.label(&progress);
-            ui.add(
-                egui::ProgressBar::new(1.0)
-                    .animate(true)
-                    .text(tr(lang, "working…")),
-            );
+            crate::gui::state::ui_progress_line(ui, &progress, lang);
             ui.separator();
         }
         egui::CollapsingHeader::new(tr(lang, "Install a mod loader"))
@@ -1101,10 +1093,14 @@ impl App {
         build: updater::LoaderBuild,
     ) {
         self.installing.store(true, Ordering::SeqCst);
-        self.install_progress
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        {
+            let mut p = self
+                .install_progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            p.label.clear();
+            p.frac = None;
+        }
         let game_dir = self.active_game_dir();
         let progress = self.install_progress.clone();
         let installing = self.installing.clone();
@@ -1121,8 +1117,10 @@ impl App {
                     &mc,
                     &build,
                     lang,
-                    &mut |msg| {
-                        *progress.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
+                    &mut |msg, frac| {
+                        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                        p.label = msg.to_string();
+                        p.frac = frac;
                     },
                 );
                 installing.store(false, Ordering::SeqCst);
@@ -1300,10 +1298,14 @@ impl App {
 
     pub(crate) fn install_version(&mut self, version: updater::ManifestVersion) {
         self.installing.store(true, Ordering::SeqCst);
-        self.install_progress
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        {
+            let mut p = self
+                .install_progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            p.label.clear();
+            p.frac = None;
+        }
         let game_dir = self.active_game_dir();
         let progress = self.install_progress.clone();
         let installing = self.installing.clone();
@@ -1313,8 +1315,10 @@ impl App {
             move || {
                 let agent = crate::net::agent();
                 let result =
-                    updater::install_version(&agent, &game_dir, &version, lang, &mut |msg| {
-                        *progress.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
+                    updater::install_version(&agent, &game_dir, &version, lang, &mut |msg, frac| {
+                        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                        p.label = msg.to_string();
+                        p.frac = frac;
                     });
                 installing.store(false, Ordering::SeqCst);
                 result.map_err(|e| e.to_string())

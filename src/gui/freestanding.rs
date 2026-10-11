@@ -29,7 +29,8 @@ use crate::version::{self, Version};
 use crate::version_json::VersionJson;
 
 use super::state::{
-    App, ContentUi, IconCache, Job, RunningGame, Screen, TerminateKind, VersionFilter, VersionSort,
+    App, ContentUi, IconCache, Job, ProgressLine, RunningGame, Screen, TerminateKind,
+    VersionFilter, VersionSort,
     CONSOLE_CAP,
 };
 use super::toast_ui::push_line;
@@ -75,7 +76,7 @@ impl App {
             new_instance_pack_file: String::new(),
             new_instance_pack_summary: None,
             modpack_installing: false,
-            modpack_progress: Arc::new(Mutex::new(String::new())),
+            modpack_progress: Arc::new(Mutex::new(ProgressLine::default())),
             launch_instance: String::new(),
             instance_terminate_pending: None,
             manifest: None,
@@ -84,7 +85,7 @@ impl App {
             version_loader_filter: None,
             version_sort: VersionSort::Newest,
             version_search: String::new(),
-            install_progress: Arc::new(Mutex::new(String::new())),
+            install_progress: Arc::new(Mutex::new(ProgressLine::default())),
             installing: Arc::new(AtomicBool::new(false)),
             loader_pick: updater::Loader::Fabric,
             loader_builds: BTreeMap::new(),
@@ -95,7 +96,7 @@ impl App {
             modrinth: ContentUi::default(),
             icon_cache: IconCache::default(),
             content_downloading: false,
-            content_progress: Arc::new(Mutex::new(String::new())),
+            content_progress: Arc::new(Mutex::new(ProgressLine::default())),
             content_mc_filter: String::new(),
             server_status: BTreeMap::new(),
             new_server_name: String::new(),
@@ -129,6 +130,7 @@ impl App {
             java_dl_major: 21,
             java_dl_sub: None,
             java_downloading: None,
+            java_progress: Arc::new(Mutex::new(ProgressLine::default())),
             java_download_open: false,
             diag_results: Vec::new(),
             diag_pending: Vec::new(),
@@ -186,18 +188,37 @@ impl App {
         self.java_downloading = Some((edition.clone(), major, sub.clone()));
         let runtimes = self.home_dir.join("runtimes");
         let lang = self.settings.language;
+        {
+            let mut p = self
+                .java_progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            p.label.clear();
+            p.frac = None;
+        }
+        let progress = self.java_progress.clone();
         self.spawn_job(
             move || {
-                crate::java_download::install_runtime(
+                let result = crate::java_download::install_runtime(
                     &crate::net::agent(),
                     lang,
                     &edition,
                     major,
                     &sub,
                     &runtimes,
+                    &|msg, frac| {
+                        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                        p.label = msg.to_string();
+                        p.frac = frac;
+                    },
                 )
                 .map(|p| p.display().to_string())
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string());
+                {
+                    let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                    p.frac = Some(1.0);
+                }
+                result
             },
             |app, result| {
                 app.java_downloading = None;
@@ -393,11 +414,14 @@ impl App {
         }
 
         self.modpack_installing = true;
-        *self
-            .modpack_progress
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            tr_fmt(lang, "Installing modpack '{0}'…", &[&name]);
+        {
+            let mut p = self
+                .modpack_progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            p.label = tr_fmt(lang, "Installing modpack '{0}'…", &[&name]);
+            p.frac = Some(0.0);
+        }
 
         let game_root = std::path::PathBuf::from(&dir);
         let progress_line = self.modpack_progress.clone();
@@ -413,21 +437,33 @@ impl App {
                     &game_root,
                     &agent,
                     lang,
-                    &mut |msg: &str| {
-                        *progress_line
+                    &mut |msg: &str, frac: Option<f32>| {
+                        let mut p = progress_line
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner()) = msg.to_string();
+                            .unwrap_or_else(|e| e.into_inner());
+                        p.label = msg.to_string();
+                        p.frac = frac;
                     },
                 );
+                {
+                    let mut p = progress_line
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    p.frac = Some(1.0);
+                }
                 result.map_err(|e| format!("{e:#}"))
             },
             move |app, result: Result<crate::modpack::InstallOutcome, String>| {
                 let lang = app.settings.language;
                 app.modpack_installing = false;
-                app.modpack_progress
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clear();
+                {
+                    let mut p = app
+                        .modpack_progress
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    p.label.clear();
+                    p.frac = None;
+                }
                 match result {
                     Ok(outcome) => {
                         match app.instance_store.create(&name_for_apply, &dir_for_apply, lang) {
@@ -1445,7 +1481,7 @@ pub(crate) fn run_game_process(
     let agent = crate::net::agent();
     let lib_console = console.clone();
     let mut lib_progress =
-        |msg: &str| push_line(&lib_console, format!("[RustLauncher] {msg}"));
+        |msg: &str, _frac: Option<f32>| push_line(&lib_console, format!("[RustLauncher] {msg}"));
     updater::ensure_version_libraries(&agent, game_dir, &json, settings.language, &mut lib_progress)?;
     let plan = launcher::build_launch_plan(
         game_dir,

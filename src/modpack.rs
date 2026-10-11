@@ -1,4 +1,4 @@
-//! Modrinth modpack (.mrpack) installation.
+﻿//! Modrinth modpack (.mrpack) installation.
 //!
 //! A `.mrpack` is a ZIP with `modrinth.index.json` at its root: the index
 //! declares the game and loader versions plus every file to download, and
@@ -263,20 +263,27 @@ const OVERRIDE_LAYERS: [&str; 2] = ["overrides", "client-overrides"];
 /// Minecraft version + pinned loader via the vanilla `updater` machinery,
 /// then the indexed pack files, then the override layers. Idempotent —
 /// already-present files with a correct SHA-1 are kept.
+///
+/// The overall fraction is phase-weighted: Minecraft install 0–0.5, loader
+/// 0.5–0.7, pack files 0.7–0.95 (exact bytes — the index declares every
+/// `fileSize`), overrides 0.95–1.0.
 pub fn install(
     zip_path: &Path,
     game_root: &Path,
     agent: &ureq::Agent,
     lang: Language,
-    progress: &mut dyn FnMut(&str),
+    progress: &mut dyn FnMut(&str, Option<f32>),
 ) -> Result<InstallOutcome> {
     let index = read_index(zip_path, lang)?;
     let mc = index.mc_version()?.to_string();
     let (loader, build) = index.loader_dep()?;
     let build = build.to_string();
 
-    // 1. The vanilla version the pack targets.
-    progress(&tr_fmt(lang, "Installing Minecraft {0}", &[&mc]));
+    // 1. The vanilla version the pack targets (half of the whole install).
+    progress(
+        &tr_fmt(lang, "Installing Minecraft {0}", &[&mc]),
+        Some(0.0),
+    );
     let manifest = updater::fetch_manifest(agent, lang)?;
     let version = updater::find_version(&manifest, &mc).ok_or_else(|| {
         anyhow!(
@@ -284,14 +291,15 @@ pub fn install(
             tr_fmt(lang, "version {0} is required but not installed", &[&mc])
         )
     })?;
-    updater::install_version(agent, game_root, version, lang, progress)?;
+    updater::install_version(agent, game_root, version, lang, &mut |msg, frac| {
+        progress(msg, frac.map(|f| 0.5 * f));
+    })?;
 
     // 2. The pinned loader build on top of it.
-    progress(&tr_fmt(
-        lang,
-        "Installing {0} {1}",
-        &[loader.label(), &build],
-    ));
+    progress(
+        &tr_fmt(lang, "Installing {0} {1}", &[loader.label(), &build]),
+        Some(0.5),
+    );
     let builds = updater::fetch_loader_builds(agent, loader, &mc, lang)?;
     let chosen = builds
         .iter()
@@ -307,49 +315,69 @@ pub fn install(
             )
         })?
         .clone();
-    let loader_outcome =
-        updater::install_loader(agent, game_root, loader, &mc, &chosen, lang, progress)?;
+    let loader_outcome = updater::install_loader(agent, game_root, loader, &mc, &chosen, lang, &mut |msg, frac| {
+        progress(msg, frac.map(|f| 0.5 + 0.2 * f));
+    })?;
 
     // 3. The indexed pack files (the index's `fileSize` values drive the
-    //    byte progress; files without a size just advance the counter).
-    let (mut downloaded, mut skipped) = (0usize, 0usize);
-    let total = index.files.len();
-    let total_bytes: u64 = index
+    //    byte progress; files without a size fall back to unit counting).
+    let installable: Vec<&MrpackFile> = index
         .files
         .iter()
         .filter(|f| f.client_installable())
-        .map(|f| f.file_size)
-        .sum();
-    let mut done_bytes: u64 = 0;
-    for (i, pack_file) in index.files.iter().enumerate() {
-        if install_pack_file(agent, game_root, pack_file, lang)? {
+        .collect();
+    let total = installable.len();
+    let total_bytes: u64 = installable.iter().map(|f| f.file_size).sum();
+    let (mut downloaded, mut skipped) = (0usize, 0usize);
+    let mut done_bytes: u64 = 0u64;
+    let report_pack = |done: u64, units: usize, progress: &mut dyn FnMut(&str, Option<f32>)| {
+        let inner = if total_bytes > 0 {
+            done as f32 / total_bytes as f32
+        } else if total > 0 {
+            units as f32 / total as f32
+        } else {
+            1.0
+        };
+        let frac = (0.7 + 0.25 * inner).min(0.95);
+        progress(
+            &tr_fmt(
+                lang,
+                "pack files {0}/{1} ({2})",
+                &[
+                    &units.to_string(),
+                    &total.to_string(),
+                    &format!(
+                        "{:.1}/{:.1} MB",
+                        done as f64 / (1024.0 * 1024.0),
+                        total_bytes as f64 / (1024.0 * 1024.0)
+                    ),
+                ],
+            ),
+            Some(frac),
+        );
+    };
+    for (i, pack_file) in installable.iter().enumerate() {
+        let before = done_bytes;
+        if install_pack_file(agent, game_root, pack_file, lang, &mut |read| {
+            done_bytes = before.saturating_add(read);
+            report_pack(done_bytes, i + 1, progress);
+        })? {
             downloaded += 1;
         } else {
             skipped += 1;
         }
-        done_bytes = done_bytes.saturating_add(pack_file.file_size);
-        progress(&tr_fmt(
-            lang,
-            "pack files {0}/{1} ({2})",
-            &[
-                &(i + 1).to_string(),
-                &total.to_string(),
-                &format!(
-                    "{:.1}/{:.1} MB",
-                    done_bytes as f64 / (1024.0 * 1024.0),
-                    total_bytes as f64 / (1024.0 * 1024.0)
-                ),
-            ],
-        ));
+        done_bytes = before.saturating_add(pack_file.file_size);
+        report_pack(done_bytes, i + 1, progress);
     }
 
     // 4. The override layers.
-    progress(&tr(lang, "Extracting overrides…"));
+    progress(&tr(lang, "Extracting overrides…"), Some(0.97));
     let file = std::fs::File::open(zip_path)
         .with_context(|| tr(lang, "failed to open the zip archive"))?;
     let mut archive = zip::ZipArchive::new(file)
         .with_context(|| tr(lang, "failed to open the zip archive"))?;
     let overrides = extract_overlays(&mut archive, game_root, lang)?;
+    progress(&tr(lang, "Extracting overrides…"), Some(1.0));
 
     Ok(InstallOutcome {
         pack_name: index.name,
@@ -361,12 +389,14 @@ pub fn install(
 }
 
 /// Download one indexed pack file (unless a copy with the correct SHA-1 is
-/// already in place). Returns true when it was downloaded.
+/// already in place). Returns true when it was downloaded. `on_bytes`
+/// receives the running byte count of the current download.
 fn install_pack_file(
     agent: &ureq::Agent,
     game_root: &Path,
     pack_file: &MrpackFile,
     lang: Language,
+    on_bytes: &mut dyn FnMut(u64),
 ) -> Result<bool> {
     if !pack_file.client_installable() {
         return Ok(false);
@@ -393,7 +423,7 @@ fn install_pack_file(
     let mut bytes = None;
     let mut last_err = None;
     for url in &pack_file.downloads {
-        match crate::net::get_bytes(agent, url, lang) {
+        match crate::net::get_bytes_progress(agent, url, lang, &mut |done, _| on_bytes(done)) {
             Ok(b) => {
                 bytes = Some(b);
                 break;
@@ -749,7 +779,7 @@ mod tests {
             file_size: 16,
         };
         let agent = crate::net::agent();
-        let downloaded = install_pack_file(&agent, &game_root, &pack_file, LANG).unwrap();
+        let downloaded = install_pack_file(&agent, &game_root, &pack_file, LANG, &mut |_read| {}).unwrap();
         assert!(!downloaded);
         assert_eq!(std::fs::read(&jar_path).unwrap(), b"already installed");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -768,7 +798,7 @@ mod tests {
             file_size: 0,
         };
         let agent = crate::net::agent();
-        let err = install_pack_file(&agent, &game_root, &pack_file, LANG).unwrap_err();
+        let err = install_pack_file(&agent, &game_root, &pack_file, LANG, &mut |_read| {}).unwrap_err();
         assert!(err.to_string().contains("unsafe path"), "{err:#}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -789,7 +819,7 @@ mod tests {
             file_size: 0,
         };
         let agent = crate::net::agent();
-        let downloaded = install_pack_file(&agent, &game_root, &pack_file, LANG).unwrap();
+        let downloaded = install_pack_file(&agent, &game_root, &pack_file, LANG, &mut |_read| {}).unwrap();
         assert!(!downloaded);
         assert!(!game_root.join("mods").exists());
         let _ = std::fs::remove_dir_all(&tmp);
