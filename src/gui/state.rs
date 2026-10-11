@@ -41,31 +41,36 @@ pub struct ProgressLine {
 pub(crate) type SharedProgress = Arc<Mutex<ProgressLine>>;
 
 /// Render one progress line: label, then a bar with the `X/100%` marker to
-/// its right — or a spinner when the fraction is unknown.
+/// its right. An unknown fraction (`None` = indeterminate) keeps the same
+/// bar — animated — with "working…" painted on top of it; swapping in a
+/// separate spinner row instead made the layout jump and flicker.
 pub(crate) fn ui_progress_line(ui: &mut egui::Ui, p: &ProgressLine, lang: crate::lang::Language) {
     if !p.label.is_empty() {
         ui.label(&p.label);
     }
-    match p.frac {
-        Some(frac) => {
-            let frac = frac.clamp(0.0, 1.0);
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::ProgressBar::new(frac)
-                        .animate(true)
-                        .desired_height(16.0)
-                        .desired_width(220.0),
+    ui.horizontal(|ui| {
+        let frac = p.frac.unwrap_or(0.0);
+        let bar = ui.add(
+            egui::ProgressBar::new(frac)
+                .animate(true)
+                .desired_height(16.0)
+                .desired_width(220.0),
+        );
+        match p.frac {
+            Some(frac) => {
+                ui.monospace(format!("{}/100%", (frac.clamp(0.0, 1.0) * 100.0) as i32));
+            }
+            None => {
+                ui.painter().text(
+                    bar.rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    crate::lang::tr(lang, "working…"),
+                    egui::FontId::proportional(12.5),
+                    ui.style().visuals.strong_text_color(),
                 );
-                ui.monospace(format!("{}/100%", (frac * 100.0) as i32));
-            });
+            }
         }
-        None => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.weak(crate::lang::tr(lang, "working…"));
-            });
-        }
-    }
+    });
 }
 
 /// Cached loader builds for one (loader, mc-version) pair.
