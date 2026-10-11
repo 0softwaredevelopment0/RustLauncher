@@ -281,6 +281,27 @@ impl App {
         });
     }
 
+    /// Handle files dropped onto the window: only while the Instances tab
+    /// is open in modpack import mode; the first dropped `.mrpack` fills
+    /// the file field. Everything else is ignored so other screens are
+    /// unaffected.
+    pub(crate) fn handle_dropped_files(&mut self, files: Vec<egui::DroppedFile>) {
+        if self.screen != Screen::Instances || !self.new_instance_modpack {
+            return;
+        }
+        let pack = files.into_iter().find_map(|f| {
+            let path = f.path?;
+            path
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .ends_with(".mrpack")
+                .then_some(path)
+        });
+        if let Some(path) = pack {
+            self.set_modpack_file(&path);
+        }
+    }
+
     // ── Modpack import (New instance dialog) ────────────────────────────
 
     /// Point the dialog at a `.mrpack` archive: validate the extension,

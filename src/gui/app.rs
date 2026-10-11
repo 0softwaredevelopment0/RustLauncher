@@ -854,6 +854,13 @@ impl eframe::App for App {
         self.paint_background(ctx);
         self.tick_toasts();
 
+        // Drag & drop: in modpack import mode a dropped .mrpack fills the
+        // file field of the New instance dialog.
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if !dropped.is_empty() {
+            self.handle_dropped_files(dropped);
+        }
+
         // Repaint while the game runs, an install/download is in progress or
         // a modpack import is running, so the console and progress labels
         // keep moving without user input.
