@@ -88,7 +88,7 @@ impl MrpackIndex {
         let index: MrpackIndex = serde_json::from_slice(bytes).with_context(|| {
             tr(
                 Language::English,
-                "failed to parse modrinth.index.json: parse error",
+                "failed to parse modrinth.index.json",
             )
         })?;
         index.validate()?;
@@ -163,9 +163,10 @@ impl MrpackIndex {
             .ok_or_else(|| {
                 anyhow!(
                     "{}",
-                    tr(
+                    tr_fmt(
                         Language::English,
-                        "the modpack must declare exactly one loader (found 0)",
+                        "the modpack must declare exactly one loader (found {0})",
+                        &["0"],
                     )
                 )
             })?;
