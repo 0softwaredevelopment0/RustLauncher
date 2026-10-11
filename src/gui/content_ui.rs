@@ -680,11 +680,22 @@ impl App {
                 app.content_downloading = false;
                 match result {
                     Ok(path) => {
-                        let msg = tr_fmt(
-                            lang,
-                            "{0} installed to {1}",
-                            &[&item.title, &path.display().to_string()],
-                        );
+                        // A modpack archive is a hand-off artifact: point the
+                        // user at the New instance dialog instead of claiming
+                        // an install.
+                        let msg = if kind == content::ContentKind::Modpack {
+                            tr_fmt(
+                                lang,
+                                "Modpack archive saved to {0} — create an instance to install it",
+                                &[&path.display().to_string()],
+                            )
+                        } else {
+                            tr_fmt(
+                                lang,
+                                "{0} installed to {1}",
+                                &[&item.title, &path.display().to_string()],
+                            )
+                        };
                         app.log_console(format!("[RustLauncher] {msg}"));
                         app.notify_info(msg);
                     }

@@ -61,11 +61,17 @@ impl ContentKind {
 
     /// Whether downloads of this kind go to the user's Downloads folder
     /// instead of the game directory (server-side things, packs whose
-    /// in-game folders are managed manually).
+    /// in-game folders are managed manually, and modpack archives — a
+    /// `.mrpack` is a hand-off artifact imported through the New instance
+    /// dialog, not game content).
     pub fn goes_to_downloads(self) -> bool {
         matches!(
             self,
-            ContentKind::DataPack | ContentKind::Shader | ContentKind::Plugin | ContentKind::Server
+            ContentKind::DataPack
+                | ContentKind::Shader
+                | ContentKind::Plugin
+                | ContentKind::Server
+                | ContentKind::Modpack
         )
     }
 
@@ -75,8 +81,6 @@ impl ContentKind {
             ContentKind::Mod => "mods",
             ContentKind::ResourcePack => "resourcepacks",
             ContentKind::World => "saves",
-            // Modpacks unpack into their own versions/<id> dir at install.
-            ContentKind::Modpack => "versions",
             _ => "downloads",
         }
     }
@@ -748,6 +752,7 @@ mod tests {
         assert!(ContentKind::Shader.goes_to_downloads());
         assert!(ContentKind::Plugin.goes_to_downloads());
         assert!(ContentKind::Server.goes_to_downloads());
+        assert!(ContentKind::Modpack.goes_to_downloads());
         assert!(!ContentKind::Mod.goes_to_downloads());
         assert!(!ContentKind::ResourcePack.goes_to_downloads());
     }
