@@ -75,6 +75,92 @@ impl Language {
             Language::Korean => "한국어",
         }
     }
+
+    /// The name of this language written in `ui` — the currently selected
+    /// UI language (`Language::English.name_in(Language::Russian)` is
+    /// "Английский"). Rows are UI languages, columns follow [`Language::ALL`].
+    pub fn name_in(self, ui: Language) -> &'static str {
+        const NAMES: [[&str; 13]; 13] = [
+            // English UI
+            [
+                "English", "Russian", "German", "French", "Spanish", "Italian", "Portuguese",
+                "Polish", "Ukrainian", "Turkish", "Chinese", "Japanese", "Korean",
+            ],
+            // Russian UI
+            [
+                "Английский", "Русский", "Немецкий", "Французский", "Испанский", "Итальянский",
+                "Португальский", "Польский", "Украинский", "Турецкий", "Китайский", "Японский",
+                "Корейский",
+            ],
+            // German UI
+            [
+                "Englisch", "Russisch", "Deutsch", "Französisch", "Spanisch", "Italienisch",
+                "Portugiesisch", "Polnisch", "Ukrainisch", "Türkisch", "Chinesisch", "Japanisch",
+                "Koreanisch",
+            ],
+            // French UI
+            [
+                "Anglais", "Russe", "Allemand", "Français", "Espagnol", "Italien", "Portugais",
+                "Polonais", "Ukrainien", "Turc", "Chinois", "Japonais", "Coréen",
+            ],
+            // Spanish UI
+            [
+                "Inglés", "Ruso", "Alemán", "Francés", "Español", "Italiano", "Portugués",
+                "Polaco", "Ucraniano", "Turco", "Chino", "Japonés", "Coreano",
+            ],
+            // Italian UI
+            [
+                "Inglese", "Russo", "Tedesco", "Francese", "Spagnolo", "Italiano", "Portoghese",
+                "Polacco", "Ucraino", "Turco", "Cinese", "Giapponese", "Coreano",
+            ],
+            // Portuguese UI
+            [
+                "Inglês", "Russo", "Alemão", "Francês", "Espanhol", "Italiano", "Português",
+                "Polonês", "Ucraniano", "Turco", "Chinês", "Japonês", "Coreano",
+            ],
+            // Polish UI
+            [
+                "Angielski", "Rosyjski", "Niemiecki", "Francuski", "Hiszpański", "Włoski",
+                "Portugalski", "Polski", "Ukraiński", "Turecki", "Chiński", "Japoński",
+                "Koreański",
+            ],
+            // Ukrainian UI
+            [
+                "Англійська", "Російська", "Німецька", "Французька", "Іспанська", "Італійська",
+                "Португальська", "Польська", "Українська", "Турецька", "Китайська", "Японська",
+                "Корейська",
+            ],
+            // Turkish UI
+            [
+                "İngilizce", "Rusça", "Almanca", "Fransızca", "İspanyolca", "İtalyanca",
+                "Portekizce", "Lehçe", "Ukraynaca", "Türkçe", "Çince", "Japonca", "Korece",
+            ],
+            // Chinese UI
+            [
+                "英语", "俄语", "德语", "法语", "西班牙语", "意大利语", "葡萄牙语", "波兰语",
+                "乌克兰语", "土耳其语", "中文", "日语", "韩语",
+            ],
+            // Japanese UI
+            [
+                "英語", "ロシア語", "ドイツ語", "フランス語", "スペイン語", "イタリア語",
+                "ポルトガル語", "ポーランド語", "ウクライナ語", "トルコ語", "中国語", "日本語",
+                "韓国語",
+            ],
+            // Korean UI
+            [
+                "영어", "러시아어", "독일어", "프랑스어", "스페인어", "이탈리아어", "포르투갈어",
+                "폴란드어", "우크라이나어", "터키어", "중국어", "일본어", "한국어",
+            ],
+        ];
+        NAMES[ui as usize][self as usize]
+    }
+
+    /// The Settings picker label: the language's own name plus, in
+    /// parentheses, its name in the selected UI language — `English` in a
+    /// Russian UI renders as `English (Английский)`.
+    pub fn picker_label(self, ui: Language) -> String {
+        format!("{} ({})", self.label(), self.name_in(ui))
+    }
 }
 
 /// Translate an English UI string. Unknown keys (or languages without a
@@ -132,6 +218,32 @@ mod tests {
             &["Fabric", "0.16", "1.21"],
         );
         assert_eq!(s, "Install Fabric 0.16 on 1.21");
+    }
+
+    #[test]
+    fn name_in_diagonal_matches_native_labels() {
+        // The name of a language in its own UI must be its native label,
+        // and every row must cover all languages (compile-time by shape,
+        // runtime check for the diagonal).
+        for lang in Language::ALL {
+            assert_eq!(lang.name_in(lang), lang.label());
+        }
+    }
+
+    #[test]
+    fn picker_label_shows_selected_language_name_in_parens() {
+        assert_eq!(
+            Language::English.picker_label(Language::English),
+            "English (English)"
+        );
+        assert_eq!(
+            Language::English.picker_label(Language::Russian),
+            "English (Английский)"
+        );
+        assert_eq!(
+            Language::Russian.picker_label(Language::English),
+            "Русский (Russian)"
+        );
     }
 
     #[test]

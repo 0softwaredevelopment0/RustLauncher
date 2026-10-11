@@ -23,11 +23,13 @@ impl App {
             ui.horizontal(|ui| {
                 let mut language = self.settings.language;
                 egui::ComboBox::from_id_salt("language")
-                    .selected_text(language.label())
-                    .width(140.0)
+                    .selected_text(language.picker_label(lang))
+                    .width(200.0)
                     .show_ui(ui, |ui| {
                         for l in Language::ALL {
-                            ui.selectable_value(&mut language, l, l.label());
+                            // The parenthetical name follows the applied UI
+                            // language while the dropdown is open.
+                            ui.selectable_value(&mut language, l, l.picker_label(lang));
                         }
                     });
                 if language != self.settings.language {
