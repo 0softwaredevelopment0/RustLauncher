@@ -379,6 +379,18 @@ impl App {
                     ui.add(egui::DragValue::new(&mut self.settings.game_height).range(240..=4320));
                 });
             });
+            ui.checkbox(
+                &mut self.settings.close_games_on_exit,
+                tr(lang, "Close running games on exit"),
+            );
+            ui.label(
+                egui::RichText::new(tr(
+                    lang,
+                    "When the launcher closes, all running games are asked to quit (no force kill).",
+                ))
+                .small()
+                .color(egui::Color32::GRAY),
+            );
 
             ui.strong(tr(lang, "Logs"));
             ui.horizontal(|ui| {
@@ -862,6 +874,17 @@ impl eframe::App for App {
         self.sync_visuals(ctx);
         self.paint_background(ctx);
         self.tick_toasts();
+
+        // Window close: when the setting asks for it, politely stop every
+        // running game (WM_CLOSE, no force kill). This frame is the last
+        // one — without CancelClose eframe exits the event loop right
+        // after it, so the fire-and-forget taskkill is all we can do.
+        if self.settings.close_games_on_exit
+            && ctx.input(|i| i.viewport().close_requested())
+            && self.any_game_running()
+        {
+            self.stop_all_games();
+        }
 
         // Drag & drop: in modpack import mode a dropped .mrpack fills the
         // file field of the New instance dialog.

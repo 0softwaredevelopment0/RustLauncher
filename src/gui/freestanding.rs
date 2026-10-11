@@ -1130,6 +1130,26 @@ impl App {
         }
     }
 
+    /// Politely stop every running game (launcher exit with the
+    /// "close games on exit" setting): posts WM_CLOSE to each game PID so
+    /// the JVM runs its shutdown hooks — never a force kill. Fire-and-forget
+    /// taskkill processes outlive the launcher; no toasts or console writes
+    /// because the launcher window is already closing.
+    pub(crate) fn stop_all_games(&mut self) {
+        for game in &self.running_games {
+            if !game.running.load(Ordering::SeqCst) {
+                continue;
+            }
+            let pid = *game.pid.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(pid) = pid else {
+                continue;
+            };
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string()])
+                .spawn();
+        }
+    }
+
     /// The Stop/Kill confirmation dialog: material warning triangle,
     /// a "don't ask again" checkbox, and Confirm / Cancel buttons.
     pub(crate) fn show_terminate_confirmation(&mut self, ctx: &egui::Context, kind: TerminateKind) {

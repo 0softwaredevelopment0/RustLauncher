@@ -396,6 +396,10 @@ pub struct Settings {
     pub confirm_kill: bool,
     /// Ask for confirmation before politely stopping the game (Stop button).
     pub confirm_stop: bool,
+    /// Politely stop every running game when the launcher window closes
+    /// (WM_CLOSE to each java process — the JVM runs its shutdown hooks;
+    /// never a force kill). Off by default: games outlive the launcher.
+    pub close_games_on_exit: bool,
     /// Base URL of the website (news API is `<base>/api/news`).
     pub news_url: String,
     /// GUI language (English by default).
@@ -422,6 +426,7 @@ impl Default for Settings {
             dark_theme: None,
             confirm_kill: true,
             confirm_stop: true,
+            close_games_on_exit: false,
             news_url: "https://rizer001.opik.net".to_string(),
             language: Language::default(),
         }
