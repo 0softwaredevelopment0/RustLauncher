@@ -8,8 +8,8 @@ use std::path::Path;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::home;
-use crate::jvm;
+use crate::util::home;
+use crate::game::jvm;
 use crate::lang::Language;
 
 /// What the console captures: launcher's own `[RustLauncher] …` lines and

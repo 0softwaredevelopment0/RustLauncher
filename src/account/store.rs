@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use rusqlite::Connection;
 
-use crate::auth::AccountKind;
-use crate::db;
+use crate::account::AccountKind;
+use crate::account::db;
 use crate::lang::{tr, Language};
 
 /// One stored account.
@@ -163,7 +163,7 @@ impl AccountStore {
 
     /// Add an offline account protected by a password (Argon2id-hashed).
     pub fn add_offline(&mut self, name: &str, password: &str, lang: Language) -> Result<String> {
-        let name = crate::auth::validate_username(name, lang)?.to_string();
+        let name = crate::account::validate_username(name, lang)?.to_string();
         if password.is_empty() {
             return Err(anyhow!(
                 "{}",
@@ -181,7 +181,7 @@ impl AccountStore {
             ));
         }
         let hash = db::hash_password(password)?;
-        let uuid = crate::auth::offline_uuid(&name);
+        let uuid = crate::account::offline_uuid(&name);
         self.conn()?.execute(
             "INSERT INTO accounts(kind, username, uuid, password_hash) VALUES ('offline', ?1, ?2, ?3)",
             rusqlite::params![name, uuid, hash],

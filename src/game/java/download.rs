@@ -12,7 +12,7 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 
 use crate::lang::Language;
-use crate::net;
+use crate::util::net;
 
 // ---------------------------------------------------------------------------
 // Editions

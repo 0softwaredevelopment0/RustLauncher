@@ -1,5 +1,5 @@
 //! Material Icons (Google's official icon font, Apache 2.0) embedded into the
-//! binary and registered as an egui fallback font (see [`crate::fonts`]), so
+//! binary and registered as an egui fallback font (see [`crate::gui::theme::fonts`]), so
 //! UI text can use real vector icons instead of unicode placeholders that
 //! render as empty boxes.
 //!
@@ -8,7 +8,7 @@
 //! fonts (which lack these codepoints) fall through.
 
 /// The embedded Material Icons font bytes.
-pub(crate) static FONT_BYTES: &[u8] = include_bytes!("../assets/MaterialIcons-Regular.ttf");
+pub(crate) static FONT_BYTES: &[u8] = include_bytes!("../../../assets/MaterialIcons-Regular.ttf");
 
 // Icon codepoints from the Material Icons `codepoints` file. Each constant is
 // a string holding the single glyph, ready for `format!()`-ing into labels
@@ -105,7 +105,7 @@ mod tests {
         // Guards against a typo'd codepoint rendering as a tofu box: install
         // the fonts and check the embedded icon font actually has each glyph.
         let ctx = egui::Context::default();
-        crate::fonts::install(&ctx);
+        crate::gui::theme::fonts::install(&ctx);
         let id = egui::FontId::proportional(16.0);
         let missing = std::cell::RefCell::new(Vec::new());
         let _ = ctx.run(egui::RawInput::default(), |ctx| {

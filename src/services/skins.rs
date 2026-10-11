@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use image::ImageFormat;
 
 use crate::lang::{tr, tr_fmt, Language};
-use crate::net;
+use crate::util::net;
 
 /// Download the skin PNG for `username` into `skins_dir` and return its path.
 pub fn download_skin(

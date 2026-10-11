@@ -8,7 +8,7 @@
 
 use std::sync::OnceLock;
 
-use crate::icons;
+use crate::gui::theme::icons;
 
 /// Upper bound on how many system CJK faces to load, to bound memory use.
 /// Windows ships separate faces for Chinese/Japanese (YaHei, MS Gothic) and

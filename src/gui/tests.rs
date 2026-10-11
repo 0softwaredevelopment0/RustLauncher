@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::updater::{self, Manifest};
-use crate::version::Version;
+use crate::game::version::Version;
 
 use super::state::{
     base_mc_of, cmp_version_parts_asc, loader_of, merge_versions, sort_version_rows, VersionFilter,

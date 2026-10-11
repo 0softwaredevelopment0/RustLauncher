@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
-use crate::accounts::AccountStore;
-use crate::auth::{self, AccountKind};
-use crate::home;
-use crate::icons;
-use crate::servers;
-use crate::skins;
+use crate::account::AccountStore;
+use crate::account::{auth, AccountKind};
+use crate::util::home;
+use crate::gui::theme::icons;
+use crate::services::servers;
+use crate::services::skins;
 use crate::updater;
 
 use super::state::{
@@ -21,7 +21,7 @@ use super::state::{
 };
 use super::toast_ui::{draw_search_icon, draw_warning_triangle};
 use crate::lang::{tr, tr_fmt};
-use crate::settings;
+use crate::services::settings;
 
 impl App {
     pub(crate) fn ui_general(&mut self, ui: &mut egui::Ui) {
@@ -879,7 +879,7 @@ impl App {
             self.manifest_loading = true;
             self.spawn_job(
                 move || {
-                    updater::fetch_manifest(&crate::net::agent(), lang).map_err(|e| e.to_string())
+                    updater::fetch_manifest(&crate::util::net::agent(), lang).map_err(|e| e.to_string())
                 },
                 |app, result| {
                     app.manifest = Some(result);
@@ -1074,7 +1074,7 @@ impl App {
         let lang = self.settings.language;
         self.spawn_job(
             move || {
-                let agent = crate::net::agent();
+                let agent = crate::util::net::agent();
                 updater::fetch_loader_builds(&agent, loader, &mc_task, lang)
                     .map_err(|e| e.to_string())
             },
@@ -1108,7 +1108,7 @@ impl App {
 
         self.spawn_job(
             move || {
-                let agent = crate::net::agent();
+                let agent = crate::util::net::agent();
                 let result = updater::install_loader(
                     &agent,
                     &game_dir,
@@ -1312,7 +1312,7 @@ impl App {
 
         self.spawn_job(
             move || {
-                let agent = crate::net::agent();
+                let agent = crate::util::net::agent();
                 let result =
                     updater::install_version(&agent, &game_dir, &version, lang, &mut |msg, frac| {
                         let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
@@ -1563,7 +1563,7 @@ impl App {
                         self.account_busy = true;
                         self.spawn_job(
                             move || {
-                                auth::microsoft_begin(&crate::net::agent(), lang)
+                                auth::microsoft_begin(&crate::util::net::agent(), lang)
                                     .map_err(|e| e.to_string())
                             },
                             move |app, result| match result {
@@ -1633,7 +1633,7 @@ impl App {
                                 self.spawn_job(
                                     move || {
                                         auth::microsoft_poll(
-                                            &crate::net::agent(),
+                                            &crate::util::net::agent(),
                                             &device_code,
                                             lang,
                                         )
@@ -1949,7 +1949,7 @@ impl App {
                             self.account_busy = true;
                             self.spawn_job(
                                 move || {
-                                    auth::microsoft_begin(&crate::net::agent(), lang)
+                                    auth::microsoft_begin(&crate::util::net::agent(), lang)
                                         .map_err(|e| e.to_string())
                                 },
                                 move |app, result| match result {
@@ -2007,7 +2007,7 @@ impl App {
             self.ms_polling = true;
             self.spawn_job(
                 move || {
-                    auth::microsoft_poll(&crate::net::agent(), &device_code, lang)
+                    auth::microsoft_poll(&crate::util::net::agent(), &device_code, lang)
                         .map_err(|e| e.to_string())
                 },
                 move |app, result| {
@@ -2076,7 +2076,7 @@ impl App {
                 self.skin_status = tr(lang, "Downloading…").into();
                 self.spawn_job(
                     move || {
-                        skins::download_skin(&crate::net::agent(), &dir, &name, lang)
+                        skins::download_skin(&crate::util::net::agent(), &dir, &name, lang)
                             .map_err(|e| e.to_string())
                     },
                     |app, result| match result {

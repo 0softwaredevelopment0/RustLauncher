@@ -115,9 +115,9 @@ pub fn game_dir_check(dir: &str, lang: Language) -> CheckResult {
 pub fn runtimes_check(home_dir: Option<&Path>, lang: Language) -> CheckResult {
     let name = tr(lang, "Detected Java runtimes").into();
     let runtimes = home_dir.map(|h| h.join("runtimes"));
-    let found = crate::java_locator::detect_installed_javas(runtimes.as_deref());
+    let found = crate::game::java::locator::detect_installed_javas(runtimes.as_deref());
     if found.is_empty() {
-        if crate::java_locator::bundled_java().is_some() {
+        if crate::game::java::locator::bundled_java().is_some() {
             CheckResult {
                 name,
                 ok: true,
@@ -155,13 +155,13 @@ pub fn runtimes_check(home_dir: Option<&Path>, lang: Language) -> CheckResult {
 /// actually running `java -version`.
 pub fn selected_java_check(configured: Option<&str>, lang: Language) -> CheckResult {
     let name = tr(lang, "Selected Java").into();
-    match crate::java_locator::select_java(configured, None, lang) {
+    match crate::game::java::locator::select_java(configured, None, lang) {
         Err(e) => CheckResult {
             name,
             ok: false,
             detail: e.to_string(),
         },
-        Ok(path) => match crate::java_locator::probe(&path) {
+        Ok(path) => match crate::game::java::locator::probe(&path) {
             Some((major, version)) => CheckResult {
                 name,
                 ok: true,
@@ -234,7 +234,7 @@ pub fn http_check(agent: &ureq::Agent, url: &str, lang: Language) -> CheckResult
         Err(e) => CheckResult {
             name,
             ok: false,
-            detail: crate::net::classify(e, lang).to_string(),
+            detail: crate::util::net::classify(e, lang).to_string(),
         },
     }
 }

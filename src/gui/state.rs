@@ -8,19 +8,19 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result};
 
-use crate::accounts::AccountStore;
-use crate::auth::AccountKind;
+use crate::account::AccountStore;
+use crate::account::AccountKind;
 use crate::content;
-use crate::diagnostics;
-use crate::icons;
-use crate::instances;
-use crate::logs::SessionLog;
-use crate::news::NewsItem;
-use crate::notifications::Toasts;
-use crate::servers::ServerStore;
-use crate::settings::{ConsoleMode, Settings};
+use crate::services::diagnostics;
+use crate::gui::theme::icons;
+use crate::game::instances;
+use crate::util::logs::SessionLog;
+use crate::services::news::NewsItem;
+use crate::services::notifications::Toasts;
+use crate::services::servers::ServerStore;
+use crate::services::settings::{ConsoleMode, Settings};
 use crate::updater::{self, Manifest};
-use crate::version::Version;
+use crate::game::version::Version;
 
 /// The maximum number of console lines kept in memory.
 pub(crate) const CONSOLE_CAP: usize = 8000;
@@ -521,7 +521,7 @@ pub(crate) fn fetch_icon_rgba(
     url: &str,
     lang: crate::lang::Language,
 ) -> Result<(Vec<u8>, u32, u32)> {
-    let bytes = crate::net::get_bytes(&crate::net::agent(), url, lang)?;
+    let bytes = crate::util::net::get_bytes(&crate::util::net::agent(), url, lang)?;
     let img = image::load_from_memory(&bytes)
         .context(crate::lang::tr(lang, "failed to decode the icon image"))?;
     let rgba = img.to_rgba8();
@@ -616,7 +616,7 @@ pub struct App {
     pub(crate) icon_cache: IconCache,
 
     // Servers.
-    pub server_status: BTreeMap<usize, crate::servers::ServerStatus>,
+    pub server_status: BTreeMap<usize, crate::services::servers::ServerStatus>,
     pub new_server_name: String,
     pub new_server_addr: String,
     pub servers_dat_status: String,
@@ -657,13 +657,13 @@ pub struct App {
 
     // Java picker (Settings tab).
     /// Cached inventory of installed runtimes (filled by the first scan).
-    pub(crate) java_installed: Vec<crate::java_locator::InstalledJava>,
+    pub(crate) java_installed: Vec<crate::game::java::locator::InstalledJava>,
     pub(crate) java_scan_loading: bool,
     /// Whether the first inventory scan already ran.
     pub(crate) java_scanned: bool,
     /// Cached sub-version lists per (edition id, major).
     pub(crate) java_versions:
-        BTreeMap<(String, u32), Result<Vec<crate::java_download::SubVersion>, String>>,
+        BTreeMap<(String, u32), Result<Vec<crate::game::java::download::SubVersion>, String>>,
     /// Which (edition, major) lists are currently being fetched.
     pub(crate) java_versions_loading: BTreeSet<(String, u32)>,
     /// Edition id chosen in the download section.
@@ -752,7 +752,7 @@ pub(crate) struct LauncherPaths;
 
 impl LauncherPaths {
     pub(crate) fn probe() -> PathBuf {
-        crate::home::launcher_home().unwrap_or_else(|_| std::env::temp_dir())
+        crate::util::home::launcher_home().unwrap_or_else(|_| std::env::temp_dir())
     }
 }
 

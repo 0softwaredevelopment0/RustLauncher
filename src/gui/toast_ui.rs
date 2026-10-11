@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::notifications::{Toast, ToastKind};
+use crate::services::notifications::{Toast, ToastKind};
 
 use super::state::ConsoleBuffer;
 
@@ -95,7 +95,7 @@ pub(crate) fn toast_body(
             // opens upward from the header.
             if let Some(log) = full_log {
                 if expand_progress > 0.001 {
-                    let target_h = crate::notifications::TOAST_MAX_LOG_HEIGHT * expand_progress;
+                    let target_h = crate::services::notifications::TOAST_MAX_LOG_HEIGHT * expand_progress;
                     ui.add_space(6.0 * expand_progress);
                     let (log_rect, _) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), target_h),

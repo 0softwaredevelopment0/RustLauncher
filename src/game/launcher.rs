@@ -5,11 +5,11 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::auth::Account;
-use crate::classpath::build_classpath;
-use crate::java_locator;
+use crate::account::Account;
+use crate::game::classpath::build_classpath;
+use crate::game::java::locator;
 use crate::lang::{tr, tr_fmt, Language};
-use crate::version_json::VersionJson;
+use crate::game::version_json::VersionJson;
 
 /// Module-access flags for modded launchers on modern JVMs.
 ///
@@ -104,7 +104,7 @@ pub fn split_server_address(addr: &str) -> (String, String) {
 /// under the libraries directory into the natives directory.
 pub fn extract_natives(libraries_dir: &Path, natives_dir: &Path, lang: Language) -> Result<usize> {
     let mut count = 0;
-    for jar in crate::classpath::collect_jars(libraries_dir) {
+    for jar in crate::game::classpath::collect_jars(libraries_dir) {
         let Some(name) = jar.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -190,7 +190,7 @@ pub fn build_launch_plan(
         .collect();
     // The game cannot start without heap flags; presets guarantee them,
     // manual edits are checked here.
-    crate::jvm::validate_jvm_args(&parsed_args, lang).map_err(|e| anyhow::anyhow!(e))?;
+    crate::game::jvm::validate_jvm_args(&parsed_args, lang).map_err(|e| anyhow::anyhow!(e))?;
 
     let required_major = version_json
         .required_java_major()
@@ -199,8 +199,8 @@ pub fn build_launch_plan(
         .or_else(|| parent_required_java_major(game_dir, version_json))
         .unwrap_or(21);
 
-    let java = java_locator::select_java(custom_java_path, Some(required_major), lang)?;
-    let java_major = java_locator::selected_java_major(&java, lang)?;
+    let java = locator::select_java(custom_java_path, Some(required_major), lang)?;
+    let java_major = locator::selected_java_major(&java, lang)?;
 
     let natives_dir = game_dir.join("natives");
     let assets_dir = game_dir.join("assets");

@@ -15,7 +15,7 @@ use md5::compute as md5_compute;
 use serde::Deserialize;
 
 use crate::lang::{tr, tr_fmt, Language};
-use crate::net;
+use crate::util::net;
 
 /// The kind of an account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -4,7 +4,7 @@
 use std::sync::atomic::Ordering;
 
 use crate::content;
-use crate::icons;
+use crate::gui::theme::icons;
 use crate::lang::{tr, tr_fmt};
 use crate::updater;
 
@@ -106,7 +106,7 @@ impl App {
             self.spawn_job(
                 move || {
                     content::search_modrinth(
-                        &crate::net::agent(),
+                        &crate::util::net::agent(),
                         kind,
                         &query,
                         &mc,
@@ -452,7 +452,7 @@ impl App {
             self.spawn_job(
                 move || {
                     content::modrinth_versions(
-                        &crate::net::agent(),
+                        &crate::util::net::agent(),
                         &id_task,
                         &mc,
                         loader.as_deref(),
@@ -473,7 +473,7 @@ impl App {
             let id_key = project_id.clone();
             self.spawn_job(
                 move || {
-                    content::modrinth_project(&crate::net::agent(), &id_task, lang)
+                    content::modrinth_project(&crate::util::net::agent(), &id_task, lang)
                         .map_err(|e| e.to_string())
                 },
                 move |app, result| {
@@ -673,7 +673,7 @@ impl App {
 
         self.spawn_job(
             move || {
-                let agent = crate::net::agent();
+                let agent = crate::util::net::agent();
                 let result = content::download_file(&agent, &game_dir, kind, &file, lang, &|done, total| {
                     let frac = if total > 0 { Some(done as f32 / total as f32) } else { None };
                     let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::version_json::{maven_coordinate_to_path, VersionJson};
+use crate::game::version_json::{maven_coordinate_to_path, VersionJson};
 
 /// Collect all `.jar` files under a directory, recursively, sorted.
 pub fn collect_jars(dir: &Path) -> Vec<PathBuf> {
@@ -193,7 +193,7 @@ fn chain_libraries(
         let path = if direct.is_file() {
             Some(direct)
         } else {
-            crate::version::list_versions(game_dir)
+            crate::game::version::list_versions(game_dir)
                 .ok()
                 .and_then(|versions| versions.into_iter().find(|v| v.name == id))
                 .map(|v| v.json)

@@ -3,11 +3,11 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::diagnostics;
-use crate::icons;
+use crate::services::diagnostics;
+use crate::gui::theme::icons;
 use crate::lang::{tr, tr_fmt, Language};
-use crate::news::{self, NewsItem};
-use crate::settings::{self, JavaSelection};
+use crate::services::news::{self, NewsItem};
+use crate::services::settings::{self, JavaSelection};
 
 use super::state::{App, ContentPlatform, Screen};
 
@@ -292,14 +292,14 @@ impl App {
             // JVM flags: one preset picker + free edit; heap flags are
             // mandatory. Manual edits drop the mode to Custom automatically.
             ui.strong(tr(lang, "JVM flags"));
-            let active = crate::jvm::find_preset(&self.settings.java_args_preset);
+            let active = crate::game::jvm::find_preset(&self.settings.java_args_preset);
             let selected_text = active
                 .map(|p| p.label.to_string())
                 .unwrap_or_else(|| tr(lang, "Custom flags").to_string());
             egui::ComboBox::from_id_salt("jvm_flag_preset")
                 .selected_text(selected_text)
                 .show_ui(ui, |ui| {
-                    for preset in crate::jvm::PRESETS {
+                    for preset in crate::game::jvm::PRESETS {
                         let is_active = active.map(|p| p.id) == Some(preset.id);
                         if ui
                             .add_enabled(
@@ -312,7 +312,7 @@ impl App {
                             self.settings.java_args_preset = preset.id.to_string();
                         }
                     }
-                    let is_custom = self.settings.java_args_preset == crate::jvm::CUSTOM_PRESET_ID;
+                    let is_custom = self.settings.java_args_preset == crate::game::jvm::CUSTOM_PRESET_ID;
                     if ui
                         .add_enabled(
                             !is_custom,
@@ -325,7 +325,7 @@ impl App {
                     {
                         // Pinned by hand: stays Custom until another preset
                         // is picked, even if the text matches one exactly.
-                        self.settings.java_args_preset = crate::jvm::CUSTOM_PRESET_ID.to_string();
+                        self.settings.java_args_preset = crate::game::jvm::CUSTOM_PRESET_ID.to_string();
                     }
                 });
             let flags_edit = ui.add(
@@ -337,12 +337,12 @@ impl App {
             // Editing the text by hand leaves the preset mode: switch to
             // Custom unless the text still matches the active preset exactly.
             if flags_edit.changed()
-                && self.settings.java_args_preset != crate::jvm::CUSTOM_PRESET_ID
+                && self.settings.java_args_preset != crate::game::jvm::CUSTOM_PRESET_ID
                 && active
                     .map(|p| p.args != self.settings.java_args)
                     .unwrap_or(true)
             {
-                self.settings.java_args_preset = crate::jvm::CUSTOM_PRESET_ID.to_string();
+                self.settings.java_args_preset = crate::game::jvm::CUSTOM_PRESET_ID.to_string();
             }
             {
                 let flags: Vec<String> = self
@@ -352,7 +352,7 @@ impl App {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect();
-                match crate::jvm::validate_jvm_args(&flags, lang) {
+                match crate::game::jvm::validate_jvm_args(&flags, lang) {
                     Ok(()) => {
                         ui.colored_label(
                             egui::Color32::LIGHT_GREEN,
@@ -582,7 +582,7 @@ impl App {
     /// The collapsed-by-default "Download Java" section: edition, major and
     /// sub-version pickers plus the download button.
     fn ui_java_download(&mut self, ui: &mut egui::Ui, lang: Language) {
-        use crate::java_download;
+        use crate::game::java::download;
 
         ui.indent("java_download", |ui| {
             let prev_edition = self.java_dl_edition.clone();
@@ -590,7 +590,7 @@ impl App {
 
             ui.horizontal(|ui| {
                 // Edition.
-                let edition_label = java_download::find_edition(&self.java_dl_edition)
+                let edition_label = download::find_edition(&self.java_dl_edition)
                     .map(|e| e.label)
                     .unwrap_or(&self.java_dl_edition)
                     .to_string();
@@ -599,7 +599,7 @@ impl App {
                     .selected_text(edition_label)
                     .width(220.0)
                     .show_ui(ui, |ui| {
-                        for e in java_download::EDITIONS {
+                        for e in download::EDITIONS {
                             ui.selectable_value(
                                 &mut self.java_dl_edition,
                                 e.id.to_string(),
@@ -614,7 +614,7 @@ impl App {
                     .selected_text(self.java_dl_major.to_string())
                     .width(70.0)
                     .show_ui(ui, |ui| {
-                        for m in java_download::list_majors() {
+                        for m in download::list_majors() {
                             ui.selectable_value(&mut self.java_dl_major, m, m.to_string());
                         }
                     });
@@ -636,8 +636,8 @@ impl App {
                 let edition_task = edition.clone();
                 self.spawn_job(
                     move || {
-                        java_download::list_sub_versions(
-                            &crate::net::agent(),
+                        download::list_sub_versions(
+                            &crate::util::net::agent(),
                             lang,
                             &edition_task,
                             major,
@@ -760,7 +760,7 @@ impl App {
                 // Stream results: every check runs in its own background
                 // thread and appends its row to the list as soon as it
                 // finishes, so the user sees progress line by line.
-                let tasks = diagnostics::suite(crate::net::agent(), lang, input);
+                let tasks = diagnostics::suite(crate::util::net::agent(), lang, input);
                 self.diag_results.clear();
                 self.diag_pending = tasks.iter().map(|t| t.name.clone()).collect();
                 for task in tasks {

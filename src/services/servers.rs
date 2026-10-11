@@ -14,9 +14,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::home;
+use crate::util::home;
 use crate::lang::{tr, tr_fmt, Language};
-use crate::nbt::{self, Value};
+use crate::util::nbt::{self, Value};
 
 pub const DEFAULT_PORT: &str = "25565";
 

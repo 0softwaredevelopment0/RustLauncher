@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde::Deserialize;
 
 use crate::lang::{tr, tr_fmt, Language};
-use crate::net;
+use crate::util::net;
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]

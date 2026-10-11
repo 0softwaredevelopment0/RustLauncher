@@ -18,8 +18,8 @@ use serde::Deserialize;
 use sha1::{Digest, Sha1};
 
 use crate::lang::{tr, tr_fmt, Language};
-use crate::net;
-use crate::version_json::VersionJson;
+use crate::util::net;
+use crate::game::version_json::VersionJson;
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(non_snake_case, dead_code)] // `releaseTime` is kept for the UI layer
@@ -321,7 +321,7 @@ struct VersionMeta {
     #[serde(default)]
     assetIndex: Option<AssetIndexInfo>,
     #[serde(default)]
-    libraries: Vec<crate::version_json::LibraryEntry>,
+    libraries: Vec<crate::game::version_json::LibraryEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -888,7 +888,7 @@ const DEFAULT_LIBRARY_REPO: &str = "https://libraries.minecraft.net/";
 /// Resolve the download URL of a version-json library entry: the vanilla
 /// `downloads.artifact.url` when present, else the entry's own repository
 /// `url`, else the default Mojang libraries repository.
-fn library_download_url(entry: &crate::version_json::LibraryEntry) -> String {
+fn library_download_url(entry: &crate::game::version_json::LibraryEntry) -> String {
     if let Some((url, _)) = entry.artifact_download() {
         if !url.is_empty() {
             return url.to_string();
@@ -908,7 +908,7 @@ fn load_installed_version_json(game_dir: &Path, id: &str, lang: Language) -> Res
     let path = if direct.is_file() {
         direct
     } else {
-        crate::version::list_versions(game_dir)
+        crate::game::version::list_versions(game_dir)
             .ok()
             .and_then(|versions| versions.into_iter().find(|v| v.name == id))
             .map(|v| v.json)
@@ -940,7 +940,7 @@ fn natives_os() -> &'static str {
 fn download_library_entry(
     agent: &ureq::Agent,
     libs_dir: &Path,
-    lib: &crate::version_json::LibraryEntry,
+    lib: &crate::game::version_json::LibraryEntry,
     natives_key: &str,
     lang: Language,
     progress: &mut dyn FnMut(&str, Option<f32>),
@@ -1275,12 +1275,12 @@ mod tests {
 
     #[test]
     fn library_download_url_resolution_order() {
-        let with_artifact = crate::version_json::LibraryEntry {
+        let with_artifact = crate::game::version_json::LibraryEntry {
             name: "com.google.gson:gson:2.10.1".into(),
             url: String::new(),
             sha1: String::new(),
-            downloads: Some(crate::version_json::LibraryDownloads {
-                artifact: Some(crate::version_json::LibraryArtifact {
+            downloads: Some(crate::game::version_json::LibraryDownloads {
+                artifact: Some(crate::game::version_json::LibraryArtifact {
                     url: "https://libraries.minecraft.net/gson-2.10.1.jar".into(),
                     sha1: "abc".into(),
                 }),
@@ -1293,7 +1293,7 @@ mod tests {
             "https://libraries.minecraft.net/gson-2.10.1.jar"
         );
 
-        let with_repo = crate::version_json::LibraryEntry {
+        let with_repo = crate::game::version_json::LibraryEntry {
             name: "net.fabricmc:fabric-loader:0.19.5".into(),
             url: "https://maven.fabricmc.net/".into(),
             sha1: String::new(),
@@ -1305,7 +1305,7 @@ mod tests {
             "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar"
         );
 
-        let bare = crate::version_json::LibraryEntry {
+        let bare = crate::game::version_json::LibraryEntry {
             name: "org.ow2.asm:asm:9.6".into(),
             url: String::new(),
             sha1: String::new(),

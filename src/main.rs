@@ -7,35 +7,18 @@
 //! Running without arguments opens the GUI; `versions` / `launch` remain
 //! available as a scriptable CLI.
 
-mod accounts;
-mod auth;
-mod classpath;
+mod account;
 mod cli;
 mod content;
-mod db;
-mod diagnostics;
-mod fonts;
+mod game;
 mod gui;
-mod home;
-mod icons;
-mod instances;
-mod java_download;
-mod java_locator;
-mod jvm;
 mod lang;
-mod launcher;
-mod logs;
-mod modpack;
-mod nbt;
-mod net;
-mod news;
-mod notifications;
-mod servers;
-mod settings;
-mod skins;
+mod services;
 mod updater;
-mod version;
-mod version_json;
+mod util;
+
+use game::{launcher, version, version_json};
+use util::net;
 
 use anyhow::Result;
 use clap::Parser as _;
@@ -252,7 +235,7 @@ fn cmd_launch(
     // Account.
     let account = match username {
         Some(name) => {
-            let account = auth::login_offline(name, lang::Language::English)?;
+            let account = account::login_offline(name, lang::Language::English)?;
             println!("  Account:  {} (offline)", account.username);
             account
         }

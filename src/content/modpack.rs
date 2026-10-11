@@ -1,4 +1,4 @@
-﻿//! Modrinth modpack (.mrpack) installation.
+//! Modrinth modpack (.mrpack) installation.
 //!
 //! A `.mrpack` is a ZIP with `modrinth.index.json` at its root: the index
 //! declares the game and loader versions plus every file to download, and
@@ -456,7 +456,7 @@ fn install_pack_file(
     let mut bytes = None;
     let mut last_err = None;
     for url in &pack_file.downloads {
-        match crate::net::get_bytes_progress(agent, url, lang, &mut |done, _| on_bytes(done)) {
+        match crate::util::net::get_bytes_progress(agent, url, lang, &mut |done, _| on_bytes(done)) {
             Ok(b) => {
                 bytes = Some(b);
                 break;
@@ -811,7 +811,7 @@ mod tests {
             downloads: vec![], // would fail with "no download URL" if not skipped
             file_size: 16,
         };
-        let agent = crate::net::agent();
+        let agent = crate::util::net::agent();
         let downloaded = install_pack_file(&agent, &game_root, &pack_file, LANG, &mut |_read| {}).unwrap();
         assert!(!downloaded);
         assert_eq!(std::fs::read(&jar_path).unwrap(), b"already installed");
@@ -830,7 +830,7 @@ mod tests {
             downloads: vec!["https://cdn.modrinth.com/escape.jar".into()],
             file_size: 0,
         };
-        let agent = crate::net::agent();
+        let agent = crate::util::net::agent();
         let err = install_pack_file(&agent, &game_root, &pack_file, LANG, &mut |_read| {}).unwrap_err();
         assert!(err.to_string().contains("unsafe path"), "{err:#}");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -866,7 +866,7 @@ mod tests {
 
         let messages: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
         let sink = messages.clone();
-        let outcome = install(&zip_path, &game_root, &crate::net::agent(), LANG, &mut |msg, frac| {
+        let outcome = install(&zip_path, &game_root, &crate::util::net::agent(), LANG, &mut |msg, frac| {
             sink.lock().unwrap().push(format!("{msg}|{frac:?}"));
         })
         .unwrap();
@@ -906,7 +906,7 @@ mod tests {
             downloads: vec![], // must never be consulted
             file_size: 0,
         };
-        let agent = crate::net::agent();
+        let agent = crate::util::net::agent();
         let downloaded = install_pack_file(&agent, &game_root, &pack_file, LANG, &mut |_read| {}).unwrap();
         assert!(!downloaded);
         assert!(!game_root.join("mods").exists());

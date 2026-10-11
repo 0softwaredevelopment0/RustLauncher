@@ -5,6 +5,10 @@
 //! Downloads go straight into the game directory the same way the vanilla
 //! launcher lays out files: `mods/`, `resourcepacks/`, `shaderpacks/` and
 //! `saves/<name>/` for worlds (world zips are extracted).
+//!
+//! [`modpack`] installs full Modrinth modpacks (`.mrpack`).
+
+pub mod modpack;
 
 use std::path::Path;
 
@@ -12,7 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 use crate::lang::{tr, tr_fmt, Language};
-use crate::net;
+use crate::util::net;
 
 /// The kind of downloadable content.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -593,10 +597,10 @@ impl VersionSort {
         match self {
             VersionSort::Newest => tr(lang, "Newest").to_string(),
             VersionSort::Oldest => tr(lang, "Oldest").to_string(),
-            VersionSort::NumberDesc => tr_fmt(lang, "Number {0}", &[crate::icons::ARROW_DOWNWARD]),
-            VersionSort::NumberAsc => tr_fmt(lang, "Number {0}", &[crate::icons::ARROW_UPWARD]),
-            VersionSort::NameAZ => tr_fmt(lang, "A {0} Z", &[crate::icons::ARROW_FORWARD]),
-            VersionSort::NameZA => tr_fmt(lang, "Z {0} A", &[crate::icons::ARROW_FORWARD]),
+            VersionSort::NumberDesc => tr_fmt(lang, "Number {0}", &[crate::gui::theme::icons::ARROW_DOWNWARD]),
+            VersionSort::NumberAsc => tr_fmt(lang, "Number {0}", &[crate::gui::theme::icons::ARROW_UPWARD]),
+            VersionSort::NameAZ => tr_fmt(lang, "A {0} Z", &[crate::gui::theme::icons::ARROW_FORWARD]),
+            VersionSort::NameZA => tr_fmt(lang, "Z {0} A", &[crate::gui::theme::icons::ARROW_FORWARD]),
         }
     }
 

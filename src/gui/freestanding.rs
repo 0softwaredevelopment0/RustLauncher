@@ -9,24 +9,24 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result};
 
-use crate::accounts::AccountStore;
-use crate::auth::{self, AccountKind};
-use crate::diagnostics;
-use crate::fonts;
-use crate::home;
-use crate::instances;
+use crate::account::AccountStore;
+use crate::account::{auth, AccountKind};
+use crate::services::diagnostics;
+use crate::gui::theme::fonts;
+use crate::util::home;
+use crate::game::instances;
 use crate::lang::{tr, tr_fmt};
-use crate::launcher;
-use crate::launcher::LaunchPlan;
-use crate::logs::SessionLog;
-use crate::news;
-use crate::notifications::{Toast, ToastKind, Toasts};
-use crate::servers::ServerStore;
-use crate::settings::{self, JavaSelection, Settings};
-use crate::skins;
+use crate::game::launcher;
+use crate::game::launcher::LaunchPlan;
+use crate::util::logs::SessionLog;
+use crate::services::news;
+use crate::services::notifications::{Toast, ToastKind, Toasts};
+use crate::services::servers::ServerStore;
+use crate::services::settings::{self, JavaSelection, Settings};
+use crate::services::skins;
 use crate::updater::{self};
-use crate::version::{self, Version};
-use crate::version_json::VersionJson;
+use crate::game::version::{self, Version};
+use crate::game::version_json::VersionJson;
 
 use super::state::{
     App, ConsoleBuffer, ContentUi, IconCache, Job, ProgressLine, RunningGame, Screen, TerminateKind,
@@ -159,7 +159,7 @@ impl App {
         self.java_scanned = true;
         let runtimes = self.home_dir.join("runtimes");
         self.spawn_job(
-            move || crate::java_locator::detect_installed_javas(Some(&runtimes)),
+            move || crate::game::java::locator::detect_installed_javas(Some(&runtimes)),
             |app, list| {
                 app.java_installed = list;
                 app.java_scan_loading = false;
@@ -199,8 +199,8 @@ impl App {
         let progress = self.java_progress.clone();
         self.spawn_job(
             move || {
-                let result = crate::java_download::install_runtime(
-                    &crate::net::agent(),
+                let result = crate::game::java::download::install_runtime(
+                    &crate::util::net::agent(),
                     lang,
                     &edition,
                     major,
@@ -360,7 +360,7 @@ impl App {
             );
             return;
         }
-        let index = match crate::modpack::read_index(path, lang) {
+        let index = match crate::content::modpack::read_index(path, lang) {
             Ok(index) => index,
             Err(e) => {
                 self.instances_error = Some(format!("{e:#}"));
@@ -383,7 +383,7 @@ impl App {
         self.new_instance_name = name.clone();
         // The auto-filled root reserves the same numbered suffix that
         // `create()` will derive at registration time.
-        let dir = crate::home::instances_dir(&self.home_dir)
+        let dir = crate::util::home::instances_dir(&self.home_dir)
             .join(self.instance_store.unique_name(&name));
         self.new_instance_dir = dir.to_string_lossy().to_string();
         self.new_instance_pack_file = path.to_string_lossy().to_string();
@@ -447,8 +447,8 @@ impl App {
 
         self.spawn_job(
             move || {
-                let agent = crate::net::agent();
-                let result = crate::modpack::install(
+                let agent = crate::util::net::agent();
+                let result = crate::content::modpack::install(
                     &pack_path,
                     &game_root,
                     &agent,
@@ -469,7 +469,7 @@ impl App {
                 }
                 result.map_err(|e| format!("{e:#}"))
             },
-            move |app, result: Result<crate::modpack::InstallOutcome, String>| {
+            move |app, result: Result<crate::content::modpack::InstallOutcome, String>| {
                 let lang = app.settings.language;
                 app.modpack_installing = false;
                 {
@@ -675,7 +675,7 @@ impl App {
         let lang = self.settings.language;
         self.spawn_job(
             move || {
-                let agent = crate::net::agent();
+                let agent = crate::util::net::agent();
                 news::fetch(&agent, &url, lang)
             },
             |app, result| {
@@ -785,7 +785,7 @@ impl App {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        if let Err(e) = crate::jvm::validate_jvm_args(&flags, lang) {
+        if let Err(e) = crate::game::jvm::validate_jvm_args(&flags, lang) {
             self.launch_error = Some(e);
             self.screen = Screen::Settings;
             return;
@@ -963,7 +963,7 @@ impl App {
         let detail = log_path.as_deref().and_then(|p| tail_lines(p, 3));
         let full_log = log_path
             .as_deref()
-            .and_then(|p| tail_lines(p, crate::notifications::TOAST_MAX_LOG_LINES));
+            .and_then(|p| tail_lines(p, crate::services::notifications::TOAST_MAX_LOG_LINES));
 
         self.toasts.push(Toast::error(
             tr(lang, "An error occurred"),
@@ -1523,7 +1523,7 @@ pub(crate) fn run_game_process(
     // but that are missing on disk: the first launch of a Fabric/Quilt
     // profile or a hand-copied version must fetch them before the JVM
     // starts, otherwise the modloader exits with "could not find the game".
-    let agent = crate::net::agent();
+    let agent = crate::util::net::agent();
     let lib_console = console.clone();
     let mut lib_progress =
         |msg: &str, _frac: Option<f32>| push_line(&lib_console, format!("[RustLauncher] {msg}"));

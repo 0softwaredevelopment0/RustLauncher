@@ -5,6 +5,7 @@
 //! - `screens` — General / Console / Instances / Versions / Servers /
 //!   Accounts / Skins;
 //! - `content_ui` — the Modrinth browser;
+//! - `theme` — fonts (Material Icons + CJK fallback) and icon glyphs;
 //! - `toast_ui` — the notification stack and painter-drawn icons;
 //! - `app` — the eframe entry point and per-frame orchestration;
 //! - `tests` — GUI unit tests.
@@ -17,4 +18,5 @@ mod screens;
 pub(crate) mod state;
 #[cfg(test)]
 mod tests;
+pub(crate) mod theme;
 pub(crate) mod toast_ui;
