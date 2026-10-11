@@ -343,34 +343,91 @@ impl App {
                     });
                     ui.end_row();
                 });
-            if ui
-                .button(format!(
+
+            // ── Modpack import mode ──
+            ui.add_space(4.0);
+            ui.checkbox(
+                &mut self.new_instance_modpack,
+                format!(
                     "{}  {}",
-                    icons::CHECK_CIRCLE,
-                    tr(lang, "Create instance")
-                ))
+                    icons::INVENTORY_2,
+                    tr(lang, "Install modpack (.mrpack)")
+                ),
+            )
+            .on_hover_text(tr(lang, "Install a Modrinth modpack (.mrpack) into this instance"));
+            if self.new_instance_modpack {
+                egui::Grid::new("modpack_file_grid")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.label(tr(lang, "Modpack file"));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.new_instance_pack_file)
+                                    .hint_text(tr(lang, "Select a .mrpack archive…"))
+                                    .desired_width(260.0),
+                            );
+                            if ui
+                                .button(format!("{} {}", icons::FOLDER, tr(lang, "Browse…")))
+                                .clicked()
+                            {
+                                self.browse_modpack_file();
+                            }
+                        });
+                        ui.end_row();
+                    });
+                if let Some(summary) = &self.new_instance_pack_summary {
+                    ui.weak(summary);
+                }
+            }
+
+            if ui
+                .add_enabled(
+                    !self.modpack_installing,
+                    egui::Button::new(format!(
+                        "{}  {}",
+                        icons::CHECK_CIRCLE,
+                        tr(lang, "Create instance")
+                    )),
+                )
                 .clicked()
             {
                 self.instances_error = None;
-                match self.instance_store.create(
-                    &self.new_instance_name,
-                    &self.new_instance_dir,
-                    lang,
-                ) {
-                    Ok(name) => {
-                        if let Err(e) = self.instance_store.save(&self.home_dir, lang) {
+                if self.new_instance_modpack {
+                    self.start_modpack_install();
+                } else {
+                    match self.instance_store.create(
+                        &self.new_instance_name,
+                        &self.new_instance_dir,
+                        lang,
+                    ) {
+                        Ok(name) => {
+                            if let Err(e) = self.instance_store.save(&self.home_dir, lang) {
+                                self.instances_error = Some(format!("{e:#}"));
+                                self.notify_error("INSTANCES", format!("{e:#}"));
+                            } else {
+                                self.notify_info(tr_fmt(lang, "Instance '{0}' created", &[&name]));
+                                self.new_instance_name.clear();
+                                self.new_instance_dir.clear();
+                            }
+                        }
+                        Err(e) => {
                             self.instances_error = Some(format!("{e:#}"));
-                            self.notify_error("INSTANCES", format!("{e:#}"));
-                        } else {
-                            self.notify_info(tr_fmt(lang, "Instance '{0}' created", &[&name]));
-                            self.new_instance_name.clear();
-                            self.new_instance_dir.clear();
                         }
                     }
-                    Err(e) => {
-                        self.instances_error = Some(format!("{e:#}"));
-                    }
                 }
+            }
+
+            // Live progress of a running modpack import.
+            if self.modpack_installing {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    let text = self
+                        .modpack_progress
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    ui.label(text);
+                });
             }
         });
 

@@ -309,19 +309,36 @@ pub fn install(
     let loader_outcome =
         updater::install_loader(agent, game_root, loader, &mc, &chosen, lang, progress)?;
 
-    // 3. The indexed pack files.
+    // 3. The indexed pack files (the index's `fileSize` values drive the
+    //    byte progress; files without a size just advance the counter).
     let (mut downloaded, mut skipped) = (0usize, 0usize);
     let total = index.files.len();
+    let total_bytes: u64 = index
+        .files
+        .iter()
+        .filter(|f| f.client_installable())
+        .map(|f| f.file_size)
+        .sum();
+    let mut done_bytes: u64 = 0;
     for (i, pack_file) in index.files.iter().enumerate() {
         if install_pack_file(agent, game_root, pack_file, lang)? {
             downloaded += 1;
         } else {
             skipped += 1;
         }
+        done_bytes = done_bytes.saturating_add(pack_file.file_size);
         progress(&tr_fmt(
             lang,
-            "pack files {0}/{1}",
-            &[&(i + 1).to_string(), &total.to_string()],
+            "pack files {0}/{1} ({2})",
+            &[
+                &(i + 1).to_string(),
+                &total.to_string(),
+                &format!(
+                    "{:.1}/{:.1} MB",
+                    done_bytes as f64 / (1024.0 * 1024.0),
+                    total_bytes as f64 / (1024.0 * 1024.0)
+                ),
+            ],
         ));
     }
 

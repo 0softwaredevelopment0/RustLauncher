@@ -44,6 +44,7 @@ pub const FILE_DOWNLOAD: &str = "\u{e2c4}"; // file_download
 pub const REFRESH: &str = "\u{e5d5}"; // refresh
 pub const EXPAND_MORE: &str = "\u{e313}"; // expand_more
 pub const EXPAND_LESS: &str = "\u{e316}"; // expand_less
+pub const INVENTORY_2: &str = "\u{e1a6}"; // inventory_2 (modpack)
 
 /// All icon constants, used by tests.
 #[cfg(test)]
@@ -68,6 +69,7 @@ pub const ALL_ICONS: &[&str] = &[
     CHECK_CIRCLE,
     SAVE,
     CHEVRON_RIGHT,
+    INVENTORY_2,
     ARROW_UPWARD,
     ARROW_DOWNWARD,
     ARROW_FORWARD,

@@ -854,9 +854,12 @@ impl eframe::App for App {
         self.paint_background(ctx);
         self.tick_toasts();
 
-        // Repaint while the game runs or a download is in progress so the
-        // console and progress labels keep moving without user input.
-        let busy = self.any_game_running() || self.installing.load(Ordering::SeqCst);
+        // Repaint while the game runs, an install/download is in progress or
+        // a modpack import is running, so the console and progress labels
+        // keep moving without user input.
+        let busy = self.any_game_running()
+            || self.installing.load(Ordering::SeqCst)
+            || self.modpack_installing;
         if busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }

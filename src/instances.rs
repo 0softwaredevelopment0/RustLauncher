@@ -48,6 +48,19 @@ impl InstanceStore {
         self.instances.iter().find(|i| i.name == name)
     }
 
+    /// The first unused name derived from `base` (`base`, `base (2)`, …).
+    /// `create` appends the same suffix, so callers can reserve a name and
+    /// a matching directory before the instance is registered.
+    pub fn unique_name(&self, base: &str) -> String {
+        let mut final_name = base.to_string();
+        let mut counter = 1;
+        while self.instances.iter().any(|i| i.name == final_name) {
+            final_name = format!("{base} ({counter})");
+            counter += 1;
+        }
+        final_name
+    }
+
     /// Create an instance; a numbered suffix is appended when the name exists.
     /// Returns the final name.
     pub fn create(&mut self, name: &str, game_dir: &str, lang: Language) -> Result<String> {
@@ -59,12 +72,7 @@ impl InstanceStore {
         if dir.is_empty() {
             anyhow::bail!("{}", tr(lang, "instance game directory is empty"));
         }
-        let mut final_name = base.to_string();
-        let mut counter = 1;
-        while self.instances.iter().any(|i| i.name == final_name) {
-            final_name = format!("{base} ({counter})");
-            counter += 1;
-        }
+        let final_name = self.unique_name(base);
         self.instances.push(Instance {
             name: final_name.clone(),
             game_dir: dir.to_string(),

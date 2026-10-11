@@ -35,6 +35,12 @@ pub fn logs_dir(home: &Path) -> PathBuf {
     home.join("logs")
 }
 
+/// Root of launcher-managed instance directories (modpack imports default
+/// to `<this>/<name>` as the game root).
+pub fn instances_dir(home: &Path) -> PathBuf {
+    home.join("instances")
+}
+
 pub fn config_file(home: &Path) -> PathBuf {
     home.join("config.json")
 }

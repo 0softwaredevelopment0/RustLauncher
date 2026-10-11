@@ -474,6 +474,16 @@ pub struct App {
     pub new_instance_dir: String,
     /// Instance name awaiting deletion confirmation.
     pub instance_delete_pending: Option<String>,
+    /// Modpack import mode of the New instance dialog.
+    pub new_instance_modpack: bool,
+    /// Path of the `.mrpack` archive chosen for the import.
+    pub new_instance_pack_file: String,
+    /// The pack's `summary` line, shown as a hint when a file is selected.
+    pub new_instance_pack_summary: Option<String>,
+    /// A modpack import is running in the background.
+    pub modpack_installing: bool,
+    /// Human-readable install progress (steps + per-file counters).
+    pub modpack_progress: Arc<Mutex<String>>,
     /// Instance selected on the General tab for the Play button.
     pub launch_instance: String,
     /// A Stop/Kill confirmation for a specific running instance, keyed by the
