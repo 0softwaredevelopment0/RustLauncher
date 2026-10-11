@@ -638,6 +638,18 @@ fn coordinate_to_path(libraries_dir: &Path, coordinate: &str) -> Option<std::pat
     )
 }
 
+/// The version id an installed loader build gets (`fabric-loader-0.19.5-1.21.4`,
+/// `neoforge-1.21.4-21.4.157`). Shared by the installer and the modpack
+/// engine's exact skip-if-installed check.
+pub fn loader_version_id(loader: Loader, mc: &str, build: &str) -> String {
+    match loader {
+        Loader::Fabric => format!("fabric-loader-{build}-{mc}"),
+        Loader::Quilt => format!("quilt-loader-{build}-{mc}"),
+        Loader::NeoForge => format!("neoforge-{mc}-{build}"),
+        Loader::Forge => format!("forge-{mc}-{build}"),
+    }
+}
+
 /// Install a mod loader on top of an installed vanilla version.
 ///
 /// The result is a self-contained version entry in the standard layout
@@ -654,12 +666,7 @@ pub fn install_loader(
     lang: Language,
     mut progress: &mut dyn FnMut(&str, Option<f32>),
 ) -> Result<InstallOutcome> {
-    let version_id = match loader {
-        Loader::Fabric => format!("fabric-loader-{}-{mc}", build.version),
-        Loader::Quilt => format!("quilt-loader-{}-{mc}", build.version),
-        Loader::NeoForge => format!("neoforge-{mc}-{}", build.version),
-        Loader::Forge => format!("forge-{mc}-{}", build.version),
-    };
+    let version_id = loader_version_id(loader, mc, &build.version);
     let version_dir = game_dir.join("versions").join(&version_id);
     std::fs::create_dir_all(&version_dir)?;
 

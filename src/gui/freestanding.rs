@@ -486,6 +486,15 @@ impl App {
                                         ),
                                     );
                                 }
+                                // Wire the new instance into the launcher: the
+                                // Versions tab lists the active instance's game
+                                // dir, so selecting the instance plus the
+                                // modpack's version makes the tab show it as
+                                // installed and Play launches exactly it.
+                                app.launch_instance = final_name.clone();
+                                app.settings.selected_version = outcome.version_id.clone();
+                                app.save_settings();
+                                app.reload_versions();
                                 let msg = tr_fmt(
                                     lang,
                                     "Modpack '{0}' installed into instance '{1}'",

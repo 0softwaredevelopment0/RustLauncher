@@ -279,45 +279,78 @@ pub fn install(
     let (loader, build) = index.loader_dep()?;
     let build = build.to_string();
 
-    // 1. The vanilla version the pack targets (half of the whole install).
-    progress(
-        &tr_fmt(lang, "Installing Minecraft {0}", &[&mc]),
-        Some(0.0),
-    );
-    let manifest = updater::fetch_manifest(agent, lang)?;
-    let version = updater::find_version(&manifest, &mc).ok_or_else(|| {
-        anyhow!(
-            "{}",
-            tr_fmt(lang, "version {0} is required but not installed", &[&mc])
-        )
-    })?;
-    updater::install_version(agent, game_root, version, lang, &mut |msg, frac| {
-        progress(msg, frac.map(|f| 0.5 * f));
-    })?;
+    // Exact-match skip: a phase is only skipped when the exact version
+    // (Minecraft id / loader id including the pinned build) is already
+    // installed in this instance's game root. Anything else installs.
+    let mc_marker = game_root
+        .join("versions")
+        .join(&mc)
+        .join(format!("{mc}.jar"));
+    let mc_json = game_root
+        .join("versions")
+        .join(&mc)
+        .join(format!("{mc}.json"));
+    let mc_installed = mc_marker.is_file() && mc_json.is_file();
+    let version_id = updater::loader_version_id(loader, &mc, &build);
+    let loader_json = game_root
+        .join("versions")
+        .join(&version_id)
+        .join(format!("{version_id}.json"));
+    let loader_installed = loader_json.is_file();
 
-    // 2. The pinned loader build on top of it.
-    progress(
-        &tr_fmt(lang, "Installing {0} {1}", &[loader.label(), &build]),
-        Some(0.5),
-    );
-    let builds = updater::fetch_loader_builds(agent, loader, &mc, lang)?;
-    let chosen = builds
-        .iter()
-        .find(|b| b.version == build)
-        .ok_or_else(|| {
+    // 1. The vanilla version the pack targets (half of the whole install).
+    if mc_installed {
+        progress(
+            &tr_fmt(lang, "{0} is already installed", &[&mc]),
+            Some(0.45),
+        );
+    } else {
+        progress(
+            &tr_fmt(lang, "Installing Minecraft {0}", &[&mc]),
+            Some(0.0),
+        );
+        let manifest = updater::fetch_manifest(agent, lang)?;
+        let version = updater::find_version(&manifest, &mc).ok_or_else(|| {
             anyhow!(
                 "{}",
-                tr_fmt(
-                    lang,
-                    "loader build {0} for {1} not found",
-                    &[&build, &mc]
-                )
+                tr_fmt(lang, "version {0} is required but not installed", &[&mc])
             )
-        })?
-        .clone();
-    let loader_outcome = updater::install_loader(agent, game_root, loader, &mc, &chosen, lang, &mut |msg, frac| {
-        progress(msg, frac.map(|f| 0.5 + 0.2 * f));
-    })?;
+        })?;
+        updater::install_version(agent, game_root, version, lang, &mut |msg, frac| {
+            progress(msg, frac.map(|f| 0.5 * f));
+        })?;
+    }
+
+    // 2. The pinned loader build on top of it.
+    if loader_installed {
+        progress(
+            &tr_fmt(lang, "{0} is already installed", &[&version_id]),
+            Some(0.68),
+        );
+    } else {
+        progress(
+            &tr_fmt(lang, "Installing {0} {1}", &[loader.label(), &build]),
+            Some(0.5),
+        );
+        let builds = updater::fetch_loader_builds(agent, loader, &mc, lang)?;
+        let chosen = builds
+            .iter()
+            .find(|b| b.version == build)
+            .ok_or_else(|| {
+                anyhow!(
+                    "{}",
+                    tr_fmt(
+                        lang,
+                        "loader build {0} for {1} not found",
+                        &[&build, &mc]
+                    )
+                )
+            })?
+            .clone();
+        updater::install_loader(agent, game_root, loader, &mc, &chosen, lang, &mut |msg, frac| {
+            progress(msg, frac.map(|f| 0.5 + 0.2 * f));
+        })?;
+    }
 
     // 3. The indexed pack files (the index's `fileSize` values drive the
     //    byte progress; files without a size fall back to unit counting).
@@ -381,7 +414,7 @@ pub fn install(
 
     Ok(InstallOutcome {
         pack_name: index.name,
-        version_id: loader_outcome.version_id,
+        version_id,
         files_downloaded: downloaded,
         files_skipped: skipped,
         overrides_extracted: overrides,
@@ -800,6 +833,61 @@ mod tests {
         let agent = crate::net::agent();
         let err = install_pack_file(&agent, &game_root, &pack_file, LANG, &mut |_read| {}).unwrap_err();
         assert!(err.to_string().contains("unsafe path"), "{err:#}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn installed_mc_and_loader_are_skipped_exactly() {
+        let tmp = temp_dir("skip-installed");
+        let game_root = tmp.join("instance");
+        let mc = "1.21.4";
+        let build = "0.16.9";
+        let loader_id = updater::loader_version_id(updater::Loader::Fabric, mc, build);
+
+        // Exact markers of an installed Minecraft + the pinned loader build.
+        let mc_dir = game_root.join("versions").join(mc);
+        std::fs::create_dir_all(&mc_dir).unwrap();
+        std::fs::write(mc_dir.join(format!("{mc}.json")), b"{}").unwrap();
+        std::fs::write(mc_dir.join(format!("{mc}.jar")), b"jar").unwrap();
+        let loader_dir = game_root.join("versions").join(&loader_id);
+        std::fs::create_dir_all(&loader_dir).unwrap();
+        std::fs::write(loader_dir.join(format!("{loader_id}.json")), b"{}").unwrap();
+
+        // A pack with the same exact versions and nothing else to download:
+        // the whole install must run offline.
+        let zip_path = tmp.join("pack.mrpack");
+        write_zip(
+            &zip_path,
+            &[
+                (INDEX_ENTRY, format!(r#"{{"formatVersion":1,"game":"minecraft","name":"SkipPack","files":[],"dependencies":{{"minecraft":"{mc}","fabric-loader":"{build}"}}}}"#).as_bytes()),
+                ("overrides/config/skip.cfg", b"cfg"),
+            ],
+        );
+
+        let messages: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let sink = messages.clone();
+        let outcome = install(&zip_path, &game_root, &crate::net::agent(), LANG, &mut |msg, frac| {
+            sink.lock().unwrap().push(format!("{msg}|{frac:?}"));
+        })
+        .unwrap();
+
+        assert_eq!(outcome.version_id, loader_id);
+        assert_eq!(outcome.pack_name, "SkipPack");
+        assert_eq!(outcome.overrides_extracted, 1);
+        let msgs = messages.lock().unwrap();
+        assert!(
+            msgs.iter().any(|m| m.starts_with(&format!("{mc} is already installed"))),
+            "messages: {msgs:?}"
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.starts_with(&format!("{loader_id} is already installed"))),
+            "messages: {msgs:?}"
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("Installing Minecraft")),
+            "must not reinstall: {msgs:?}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
