@@ -63,11 +63,14 @@ fn main() {
 }
 
 fn cmd_gui() -> Result<()> {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1100.0, 720.0])
+        .with_min_inner_size([900.0, 600.0]);
+    if let Some(icon) = load_icon() {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([900.0, 600.0])
-            .with_icon(load_icon()),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
@@ -78,29 +81,17 @@ fn cmd_gui() -> Result<()> {
     .map_err(|e| anyhow::anyhow!("GUI failed: {e}"))
 }
 
-/// A simple built-in window icon (a green "play" triangle).
-fn load_icon() -> egui::IconData {
-    let size = 32usize;
-    let mut rgba = vec![0u8; size * size * 4];
-    for y in 0..size {
-        for x in 0..size {
-            // Triangle with vertices roughly at (8,6), (8,26), (26,16).
-            let inside =
-                (8..=26).contains(&x) && y >= 6 + (x - 8) * 5 / 9 && y <= 26 - (x - 8) * 5 / 9;
-            if inside {
-                let i = (y * size + x) * 4;
-                rgba[i] = 60;
-                rgba[i + 1] = 200;
-                rgba[i + 2] = 90;
-                rgba[i + 3] = 255;
-            }
-        }
-    }
-    egui::IconData {
-        width: size as u32,
-        height: size as u32,
-        rgba,
-    }
+/// App icon decoded from the baked-in PNG (grass block + play badge).
+fn load_icon() -> Option<egui::IconData> {
+    let img = image::load_from_memory(include_bytes!("../resources/app-icon.png"))
+        .ok()?
+        .to_rgba8();
+    let (width, height) = img.dimensions();
+    Some(egui::IconData {
+        width,
+        height,
+        rgba: img.into_raw(),
+    })
 }
 
 fn cmd_versions(game_dir: Option<&str>) -> Result<()> {

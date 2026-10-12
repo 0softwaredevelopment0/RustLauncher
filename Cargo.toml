@@ -1,10 +1,13 @@
-[package]
+﻿[package]
 name = "rustlauncher"
 version = "0.3.0-alpha.3"
 edition = "2021"
 description = "RustLauncher - a fast Minecraft launcher with GUI, rewritten in Rust (successor of the Java PowerLaunch)"
 license = "AGPL-3.0"
 authors = ["rizer01"]
+
+[build-dependencies]
+winresource = "0.1"
 
 [dependencies]
 anyhow = "1"
