@@ -235,6 +235,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "Launch" => "Запустить",
         "Launching {0} ({1}) …" => "Запуск {0} ({1}) …",
         "libraries {0}/{1}" => "библиотеки {0}/{1}",
+        "skipping library {0}: {1}" => "пропуск библиотеки {0}: {1}",
         "License:" => "Лицензия:",
         "Light" => "Светлая",
         "Load the Mojang manifest (Refresh manifest) to pick a version." => "Загрузите манифест Mojang (Обновить манифест), чтобы выбрать версию.",

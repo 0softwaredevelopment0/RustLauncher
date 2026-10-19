@@ -255,6 +255,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "Launch" => "실행",
         "Launching {0} ({1}) …" => "{0} ({1}) 실행 중 …",
         "libraries {0}/{1}" => "라이브러리 {0}/{1}",
+        "skipping library {0}: {1}" => "라이브러리 {0} 건너뜀: {1}",
         "License:" => "라이선스:",
         "Light" => "밝게",
         "Load the Mojang manifest (Refresh manifest) to pick a version." => "버전을 선택하려면 Mojang 매니페스트를 로드하세요 (매니페스트 새로 고침).",

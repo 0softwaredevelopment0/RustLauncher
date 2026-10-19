@@ -251,6 +251,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "Launch" => "开始游戏",
         "Launching {0} ({1}) …" => "正在启动 {0}（{1}）…",
         "libraries {0}/{1}" => "库 {0}/{1}",
+        "skipping library {0}: {1}" => "跳过库 {0}：{1}",
         "License:" => "许可证：",
         "Light" => "浅色",
         "Load the Mojang manifest (Refresh manifest) to pick a version." => "加载 Mojang 清单（刷新清单）以选择版本。",

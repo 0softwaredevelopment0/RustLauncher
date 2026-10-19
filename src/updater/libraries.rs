@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 
 use crate::game::version_json::{LibraryEntry, VersionJson};
 use crate::lang::{tr_fmt, Language};
@@ -66,6 +66,17 @@ pub(super) fn coordinate_rel(coordinate: &str) -> String {
     format!("{group_path}/{artifact}/{version}/{file}")
 }
 
+/// Download URL for `coordinate` inside the repository declared by `entry`
+/// (its own base, or the default Mojang libraries repository when none).
+fn coordinate_download_url(entry: &LibraryEntry, coordinate: &str) -> String {
+    let rel = coordinate_rel(coordinate);
+    if !entry.url.is_empty() {
+        format!("{}/{}", entry.url.trim_end_matches('/'), rel)
+    } else {
+        format!("{DEFAULT_LIBRARY_REPO}{rel}")
+    }
+}
+
 /// Resolve the download URL of a version-json library entry: the vanilla
 /// `downloads.artifact.url` when present, else the entry's own repository
 /// `url`, else the default Mojang libraries repository.
@@ -75,11 +86,22 @@ fn library_download_url(entry: &LibraryEntry) -> String {
             return url.to_string();
         }
     }
-    let rel = coordinate_rel(&entry.name);
-    if !entry.url.is_empty() {
-        return format!("{}/{}", entry.url.trim_end_matches('/'), rel);
+    coordinate_download_url(entry, &entry.name)
+}
+
+/// Legacy Forge quirk: old installer jsons reference the bare
+/// `net.minecraftforge:forge:<version>` artifact, but the Forge Maven only
+/// publishes it as `forge-<version>-universal.jar` — the plain jar answers
+/// HTTP 404. Maps such a coordinate (no classifier) to `:universal`,
+/// `None` for everything else.
+fn universal_fallback_coordinate(name: &str) -> Option<String> {
+    let parts: Vec<&str> = name.split(':').collect();
+    match parts.as_slice() {
+        ["net.minecraftforge", "forge", version] if !version.is_empty() => {
+            Some(format!("{name}:universal"))
+        }
+        _ => None,
     }
-    format!("{DEFAULT_LIBRARY_REPO}{rel}")
 }
 
 /// Load the version json of an installed version by id: the standard
@@ -132,7 +154,25 @@ pub(super) fn download_library_entry(
             Some((_, sha1)) if !sha1.is_empty() => sha1.to_string(),
             _ => lib.sha1.clone(),
         };
-        fetch_to_file(agent, &url, &dest, &sha1, progress, lang)?;
+        // Old Forge jsons point at a jar the Maven does not publish (only
+        // the `-universal` artifact exists); retry the universal artifact
+        // before giving up. Its checksum is not declared anywhere, so the
+        // download is kept unverified (empty sha1).
+        if let Err(err) = fetch_to_file(agent, &url, &dest, &sha1, progress, lang) {
+            let fallback = universal_fallback_coordinate(&lib.name).and_then(|coordinate| {
+                Some((
+                    coordinate_to_path(libs_dir, &coordinate)?,
+                    coordinate_download_url(lib, &coordinate),
+                ))
+            });
+            match fallback {
+                Some((universal_dest, universal_url)) => {
+                    fetch_to_file(agent, &universal_url, &universal_dest, "", progress, lang)
+                        .with_context(|| format!("universal fallback for {0}", lib.name))?;
+                }
+                None => return Err(err),
+            }
+        }
     }
     if let Some(classifier) = lib.natives_classifier(natives_key) {
         let coordinate = format!("{}:{}", lib.name, classifier);
@@ -156,6 +196,11 @@ pub(super) fn download_library_entry(
 /// missing jars. Called right before the launch, so a version whose json
 /// was added without libraries (Fabric/Quilt profiles, hand-copied dirs)
 /// still starts instead of failing with "could not find the game".
+///
+/// Best effort by design: a library whose repository is unreachable or
+/// that does not exist on it (HTTP 404) is reported through `progress`
+/// and skipped instead of aborting the launch — the classpath assembly
+/// skips jars that are still missing.
 pub fn ensure_version_libraries(
     agent: &ureq::Agent,
     game_dir: &Path,
@@ -188,7 +233,19 @@ pub fn ensure_version_libraries(
             if coordinate_to_path(&libs_dir, &lib.name).is_none() {
                 continue;
             }
-            download_library_entry(agent, &libs_dir, lib, natives, lang, progress)?;
+            // One missing/unreachable library must not block the launch:
+            // log it and keep going with the rest.
+            if let Err(err) = download_library_entry(agent, &libs_dir, lib, natives, lang, progress)
+            {
+                progress(
+                    &tr_fmt(
+                        lang,
+                        "skipping library {0}: {1}",
+                        &[&lib.name, &format!("{err:#}")],
+                    ),
+                    None,
+                );
+            }
             progress(
                 &tr_fmt(
                     lang,
@@ -286,6 +343,44 @@ mod tests {
         assert_eq!(
             library_download_url(&bare),
             "https://libraries.minecraft.net/org/ow2/asm/asm/9.6/asm-9.6.jar"
+        );
+    }
+
+    #[test]
+    fn universal_fallback_targets_only_legacy_forge() {
+        // Legacy Forge: bare coordinate is remapped to :universal.
+        assert_eq!(
+            universal_fallback_coordinate("net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10"),
+            Some("net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10:universal".to_string())
+        );
+        // Everything else stays untouched.
+        assert_eq!(universal_fallback_coordinate("net.fabricmc:fabric-loader:0.15.0"), None);
+        assert_eq!(universal_fallback_coordinate("net.neoforged:neoforge:21.4.157"), None);
+        // Already-classified coordinates are not remapped again.
+        assert_eq!(
+            universal_fallback_coordinate("net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10:universal"),
+            None
+        );
+        assert_eq!(universal_fallback_coordinate("net.minecraftforge:forge:"), None);
+    }
+
+    #[test]
+    fn legacy_forge_universal_url_resolves() {
+        // The 1.7.10 installer json declares the Forge Maven as the repo
+        // base; the universal fallback URL must point at the artifact that
+        // actually exists (the plain jar answers HTTP 404).
+        let forge = LibraryEntry {
+            name: "net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10".into(),
+            url: "https://maven.minecraftforge.net/".into(),
+            sha1: String::new(),
+            downloads: None,
+            natives: None,
+        };
+        let coordinate =
+            universal_fallback_coordinate(&forge.name).expect("legacy forge must have a fallback");
+        assert_eq!(
+            coordinate_download_url(&forge, &coordinate),
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10-universal.jar"
         );
     }
 }
